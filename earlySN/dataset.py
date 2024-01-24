@@ -49,8 +49,19 @@ def fit_sigma_mu2(params, z, x_0, errors, cov, pec = 250, dint = 0.1):
     return err
 
 class Dataset(object):
-    def __init__(self, base_path, bands, default = None, path_to_data = None, path_to_params = None, index_col = None, name = None):
-        """ Constructor for the Dataset object """
+    def __init__(self, base_path, bands, default = None, path_to_data = None, path_to_params = None, index_col = None, name = ""):
+        """ Constructor for the Dataset object, with option to use default built-in datasets or upload data from files. 
+        To create a Dataset object, user must either use a default option or provide paths to all necessary files.
+        
+        Parameters
+        ----------
+        base_path: path to this package
+        bands: list of bandpasses in dataset
+        default: "yao" (for Yao et al. 2019) or "dhawan" (for Dhawan et al. 2022)
+        path_to_data: system path to lightcurve data
+        path_to_params: system path to lightcurve params
+        index_col: column to use as DataFrame index
+        name: ID for Dataset """
 
         self.name = ""
         self.bands = bands
@@ -73,8 +84,15 @@ class Dataset(object):
         
         self.sn_names = pd.Series(self.data.index.unique())
 
-    def fit_salt(self, save_path, savefig = None, verbose = False):
-        """ Fit SALT3 parameters (z, t0, x0, x1, c) to lightcurves in the Dataset """
+    def fit_salt(self, save_path, save_fig = None, verbose = False):
+        """ Fit SALT3 parameters (z, t0, x0, x1, c) to lightcurves in the Dataset using SNCosmo. Also performs dust extinction modeling.
+        modeling,  
+        
+        Parameters:
+        -----------
+        save_path: path to directory to save SALT3 parameters
+        save_fig: optional, path to directory to save figures. If None, no figures will be saved
+        verbose: if True, print progress and parameters"""
 
         self.hubble = pd.DataFrame(index = self.sn_names, columns = ['z', 't0', 'dt0', 'x0', 'dx0', 'x1', 'dx1', 'c', 'dc', 'fmax', 'cov'])
         
@@ -116,9 +134,9 @@ class Dataset(object):
             self.hubble.loc[sn, 'fmax'] = [max_fluxes]
             
             # Make lightcurve figure
-            if savefig is not None:
+            if save_fig is not None:
                 fig = sncosmo.plot_lc(tdata, model = fitted_model, errors = result.errors)
-                plt.savefig(savefig + "{}_{}_SALT3.pdf".format(self.name, sn), format='pdf', bbox_inches='tight')
+                plt.savefig(save_fig + "{}_{}_SALT3.pdf".format(self.name, sn), format='pdf', bbox_inches='tight')
                 plt.close()
             
             #self.hubble.loc[sn, 'cv'] = [result.covariance]
