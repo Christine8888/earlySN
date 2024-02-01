@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd 
-import matplotib.pyplot as plt 
+import matplotlib.pyplot as plt 
 import math
 import sncosmo
 import ztfdr
