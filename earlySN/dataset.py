@@ -120,7 +120,7 @@ class Dataset(object):
             elif default == 'dhawan':
                 self.data = pd.read_csv(base_path + '/data/dhawan_data.csv', index_col = 'SN')
                 self.params = pd.read_csv(base_path + '/data/dhawan_params.csv', index_col = 'SN')
-                self.masses = pd.read_csv(base_path'/dhawan_masses.csv', index_col = 0).rename(columns={'0':'mass'})
+                self.masses = pd.read_csv(base_path + '/dhawan_masses.csv', index_col = 0).rename(columns={'0':'mass'})
 
         if path_to_data != None and path_to_params != None and index_col != None: # build dataset from path
             self.data = pd.read_csv(path_to_data, index_col = index_col)
