@@ -8,11 +8,12 @@ from ztfdr import release
 from astropy.cosmology import Planck18 as cosmo 
 from astropy.table import Table, unique
 import dustmaps.sfd
-dustmaps.sfd.fetch()
+#dustmaps.sfd.fetch()
 from dustmaps.sfd import SFDQuery
 from astropy.coordinates import SkyCoord
 import scipy.optimize as opt 
 from scipy import stats 
+from earlySN import lightcurve
 
 def fit_mu(params, z, x_0, x_1, c, masses):
     """ Calculate mu based on Tripp equation and SALT3 parameters.
@@ -107,20 +108,32 @@ class Dataset(object):
         name: str, ID for Dataset """
 
         self.name = ""
+        self.base_path = base_path
         self.bands = bands
+
+        # Set dataset name
         if name != None:
             self.name = name
+        elif default != None:
+            self.name = default
         
+        self.data = None
+        self.params = None
+        self.masses = None 
+        self.pecs = None
+
         if default != None: # build dataset from default sample
             self.name = default
             if default == 'yao':
                 self.data = pd.read_csv(base_path + '/data/yao_data.csv', index_col = 'SN')
                 self.params = pd.read_csv(base_path + '/data/yao_params.csv', index_col = 'SN')
-                self.masses = pd.read_csv(base_path + '/data/yao_masses.csv', index_col = 0).rename(columns={'0':'mass'})
+                self.masses = pd.read_csv(base_path + '/data/yao_masses.csv', index_col = 0).rename(columns = {'0': 'mass'})
+                self.pecs = pd.read_csv(base_path + '/data/yao_pvs.txt', index_col = 0).rename(columns = {'0': 'v'})
             elif default == 'dhawan':
                 self.data = pd.read_csv(base_path + '/data/dhawan_data.csv', index_col = 'SN')
                 self.params = pd.read_csv(base_path + '/data/dhawan_params.csv', index_col = 'SN')
-                self.masses = pd.read_csv(base_path'/dhawan_masses.csv', index_col = 0).rename(columns={'0':'mass'})
+                self.masses = pd.read_csv(base_path + '/data/dhawan_masses.csv', index_col = 0).rename(columns={'0': 'mass'})
+                self.pecs = pd.read_csv(base_path + '/data/dhawan_pvs.txt', index_col = 0).rename(columns = {'0': 'v'})
 
         if path_to_data != None and path_to_params != None and index_col != None: # build dataset from path
             self.data = pd.read_csv(path_to_data, index_col = index_col)
@@ -131,20 +144,21 @@ class Dataset(object):
                 self.masses = None
                 print('No masses found!')
         
+        self.hubble = None
         self.sn_names = pd.Series(self.data.index.unique()) # will hold all the valid SN
 
-    def fit_salt(self, save_path = None, save_fig = None, verbose = False):
+    def fit_salt(self, save_path = None, save_path = None, verbose = False):
         """ Fit SALT3 parameters (z, t0, x0, x1, c) to lightcurves in the Dataset using SNCosmo. Also performs dust extinction modeling. 
         
         Parameters:
         -----------
         save_path: str, optional (default = None), path to directory to save SALT3 parameters. If None, parameters will not be saved outside the instance
-        save_fig: str, optional (default = None), path to directory to save figures. If None, no figures will be saved
+        save_path: str, optional (default = None), path to directory to save figures. If None, no figures will be saved
         verbose: bool (default = True), if True, print progress and parameters"""
 
         self.hubble = pd.DataFrame(index = self.sn_names, columns = ['z', 't0', 'dt0', 'x0', 'dx0', 'x1', 'dx1', 'c', 'dc', 'fmax', 'cov'])
         
-        for i in range(len(self.sn_names))[:10]:
+        for i in range(len(self.sn_names)):
             sn = self.sn_names[i]
 
             if verbose:
@@ -182,13 +196,13 @@ class Dataset(object):
             self.hubble.loc[sn, 'fmax'] = [max_fluxes]
             
             # Make lightcurve figure
-            if save_fig is not None:
+            if save_path is not None:
                 fig = sncosmo.plot_lc(tdata, model = fitted_model, errors = result.errors)
-                plt.savefig(save_fig + "{}_{}_SALT3.pdf".format(self.name, sn), format='pdf', bbox_inches='tight')
+                plt.savefig(save_path + "{}_{}_SALT3.pdf".format(self.name, sn), format='pdf', bbox_inches='tight')
                 plt.close()
             
-            self.hubble['cv'] = self.hubble['cv'].astype(object)
-            self.hubble.loc[sn, 'cv'] = [result.covariance]
+            self.hubble['cov'] = self.hubble['cov'].astype(object)
+            self.hubble.loc[sn, 'cov'] = [result.covariance]
             self.hubble.loc[sn, ('t0', 'x0', 'x1', 'c')] = fitted_model.parameters[1:5] # do not use SALT3 z
             self.hubble.loc[sn, ('dt0', 'dx0', 'dx1', 'dc')] = result.errors['t0'], result.errors['x0'], result.errors['x1'], result.errors['c']
             
@@ -231,8 +245,7 @@ class Dataset(object):
         
         elif self.name == 'dhawan':
             ok_sn = ['SN Ia', 'SN Ia?','SN Ia-norm', 'SN Ia 91T-like', 'SN Ia 91T', 'SN-91T', 'SNIa-99aa']
-            spectra = pd.read_csv(DR1_PATH+'/samplefiles/Yr1_AllSNe_SampleFile_WithClassSpecCoords.txt', 
-                      index_col=0,header=None)
+            spectra = pd.read_csv(self.base_path + '/data/dhawan_data.csv', index_col=0)
             spectra = spectra[4]
         
         elif type(spectra) == str: # input is the name of a column in params
@@ -250,13 +263,14 @@ class Dataset(object):
                 self.sn_names.drop(i)
 
     
-    def pv_correction(self, pecs):
+    def pv_correction(self):
         # TO-DO: currently have nothing to load in peculiar velocities
         """ Correct velocities and redshifts based on input peculiar velocities
         
         Parameters:
         -----------
         pecs: Pandas Series or str. If Series, index should match SN names. If str, pecs should indicate the column in self.params containing the peculiar velocities."""
+        pecs = self.pecs
         if pecs is not None:
             if type(pecs) == str:
                 pecs = self.params[pecs]
@@ -335,7 +349,7 @@ class Dataset(object):
         x_1 = self.hubble.loc[self.sn_names, 'x_1'].to_numpy()
         c = self.hubble.loc[self.sn_names, 'c'].to_numpy()
         e = self.hubble.loc[self.sn_names, ['dt0', 'dx0', 'dx1', 'dc']].to_numpy()
-        cv = self.hubble.loc[self.sn_names, 'cv'].to_numpy() # check this
+        cv = self.hubble.loc[self.sn_names, 'cov'].to_numpy() # check this
         masses = self.masses.loc[self.sn_names, 'mass'].to_numpy()
 
         # Optimize initial fit
@@ -373,7 +387,7 @@ class Dataset(object):
         Parameters:
         -----------
         save_path: str, optional (default = None), path to directory to save SALT3 parameters. If None, parameters will not be saved outside the instance
-        save_fig: str, optional (default = None), path to directory to save figures. If None, no figures will be saved
+        save_path: str, optional (default = None), path to directory to save figures. If None, no figures will be saved
         verbose: bool (default = True); if True, print progress and parameters
         mass_step: bool (default = True), option to model host-galaxy mass step; if False, default range for parameter gamma is set to [-0.01, 0.01]
         outlier_cut: float (default = 5.0), minimum sigma difference from Planck18 distance modulus to label supernova as outlier
@@ -408,12 +422,64 @@ class Dataset(object):
         if save_path is not None:
             self.hubble.loc[self.sn_names].to_csv(save_path + '{}_hubble.csv')
 
-    def excess_search():
-        print('Not yet implemented')
-    
+    def excess_search(self, save_path = None):
+        targets = self.sn_names
+
+        self.gauss_params = pd.DataFrame(index = targets, columns=['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'mu', 'sigma', 'C_r', 'C_g', 'B_r', 'B_g'])
+        self.pl_params = pd.DataFrame(index = targets, columns=['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'B_r', 'B_g'])
+        
+        if save_path is not None:
+            gold = open(self.save_path + '/{}_gold.txt'.format(self.name), 'w')
+            control = open(self.save_path + '/{}_gold_control.txt'.format(self.name), 'w')
+            bronze = open(self.save_path + '/{}_bronze.txt'.format(self.name), 'w')
+
+        self.gold = []
+        self.control = []
+        self.bronze = []
+        
+        print("Searching for excess in {} supernovae".format(targets.size))
+        not_bronze = []
+        if self.name == "yao":
+            # manual control
+            not_bronze = ['ZTF18aaunfqq', 'ZTF18aaxwjmp', 'ZTF18abbpeqo', 'ZTF18aazblzy', 'ZTF18abfhaji', 'ZTF18abjstcm', 'ZTF18abjvhec', 'ZTF18abwmuua', 'ZTF18abxygvv']
+
+        # initialize way to save
+        for sn in targets:
+            if sn not in not_bronze:
+                data = self.data.loc[sn]
+                data = data[data['flux'] > data['flux_err'] > -2] # remove large negative outliers
+                
+                params = self.hubble.loc[sn]
+                fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_path = None, verbose = False)
+
+    # basically all of this is from the notebook -- NOTE TO SELF
     def load_masses():
         print('Not yet implemented')
     
     def compare_excess():
         print('Not yet implemented')
+    
+    def compare_mass():
+        print('Not yet implemented')
+    
+    def analyze_bumps():
+        print("Not yet implemented")
+    
+    def analyze_PL():
+        print("Not yet implemented")
 
+    def end_to_end(self, verbose, save_path):
+        # Processing steps
+        self.fit_salt(verbose, save_path)
+        self.salt_stats()
+        self.spectral_filter()
+        self.pv_correction()
+        self.param_cuts()
+        self.fit_hubble() # includes Tripp fitting step
+
+        # Light curve fitting
+        self.excess_search()
+
+        # Analysis steps
+        self.compare_excess()
+        self.compare_mass()
