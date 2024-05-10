@@ -6,4 +6,4 @@ import sncosmo
 import ztfdr
 
 def ghost_masses(sn_names, save_path):
-    print("Not yet implemented")
+    raise NotImplementedError("Not yet implemented")
