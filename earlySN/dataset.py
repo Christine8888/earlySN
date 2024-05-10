@@ -147,13 +147,12 @@ class Dataset(object):
         self.hubble = None
         self.sn_names = pd.Series(self.data.index.unique()) # will hold all the valid SN
 
-    def fit_salt(self, save_path = None, save_path = None, verbose = False):
+    def fit_salt(self, save_path = None, verbose = False):
         """ Fit SALT3 parameters (z, t0, x0, x1, c) to lightcurves in the Dataset using SNCosmo. Also performs dust extinction modeling. 
         
         Parameters:
         -----------
-        save_path: str, optional (default = None), path to directory to save SALT3 parameters. If None, parameters will not be saved outside the instance
-        save_path: str, optional (default = None), path to directory to save figures. If None, no figures will be saved
+        save_path: str, optional (default = None), path to directory to save SALT3 parameters and figures. If None, parameters will not be saved outside the instance
         verbose: bool (default = True), if True, print progress and parameters"""
 
         self.hubble = pd.DataFrame(index = self.sn_names, columns = ['z', 't0', 'dt0', 'x0', 'dx0', 'x1', 'dx1', 'c', 'dc', 'fmax', 'cov'])

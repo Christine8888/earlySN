@@ -77,7 +77,7 @@ def pl_model(params, data, bands):
     position = 0
     for band in bands:
         band_data = data[band]
-        diff = (band_data[:,1] - pl_rise_model(band_data[:,0], t_rise, amps[i], power[i], offset[i]))
+        diff = (band_data[:,1] - pl_rise_model(band_data[:,0], t_rise, amps[band], power[band], offset[band]))
         diff /= band_data[:,2] # scale by uncertainty
         
         # move through uncertainty array
@@ -413,7 +413,7 @@ class Lightcurve(object):
         where N is the number of data points between peak and peak - 45 days."""
         
         for band in self.bands:
-            self.data_by_band[band] = self.data[self.data['band'] =='p48{}'.format(i)]
+            self.data_by_band[band] = self.data[self.data['band'] =='p48{}'.format(band)]
 
             # Format of list -- 0: MJD, 1: flux, 2: flux error
             self.data_by_band[band] = np.array((self.data_by_band[band]['jd'], self.data_by_band[band]['flux'], self.data_by_band[band]['flux_err'])).T
@@ -462,7 +462,8 @@ class Lightcurve(object):
         n = len(self.bands)
         
         # Allow flexibility in power-law slope choice
-        pl_min = 1, pl_max = 3
+        pl_min = 1
+        pl_max = 3
         if self.pl_bounds is not None:
             pl_min, pl_max = self.pl_bounds
             pl_guess = (pl_min + pl_max) / 2
