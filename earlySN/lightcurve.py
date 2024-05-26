@@ -700,24 +700,31 @@ class Lightcurve(object):
         result, early_data = self.fit_model("gauss")
 
         if result is None:
-            print('Fit failed.')
+            if self.verbose: print('Fit failed.')
             return None  
             
         cuts, deltas, all_outliers = self.bic_range(['powerlaw', 'gauss'], bands, plot = False)
         reasonable = deltas > -150
         if np.sum(reasonable) < 2:
-            print('Unreasonable.')
+            if self.verbose: print('Unreasonable.')
             return None      
         
         # Compute parameters for power law with default cut
         result, early_data, bands = self.fit_model(cut = 10, model = 'powerlaw')
         if result is not None:
-            pl_params = result.x
+            try:
+                J = result.jac
+                cov = np.linalg.inv(J.T.dot(J))
+                var = np.sqrt(np.diagonal(cov))
+            except:
+                var = np.zeros(len(result.x))
+            
+            pl_params = result.x + var
 
         # Compute Gauss+PL parameters for best fit
         best_cut = cuts[reasonable][np.argsort(deltas[reasonable])[0]]
-        print('Best Cut: ', best_cut)   
-        result, early_data, bands = self.fit_model(cut = best_cut, model='gauss')
+        if self.verbose: print('Best Cut: ', best_cut)   
+        result, early_data, bands = self.fit_model(cut = best_cut, model = 'gauss')
         
         # check that Jacobian is invertible
         ok_jac = True
@@ -727,13 +734,15 @@ class Lightcurve(object):
             var = np.sqrt(np.diagonal(cov))
         except:
             ok_jac = False
+            var = np.zeros(len(result.x))
         
         sn_tier = "none"
 
         # Run tests to classify SN excess
         if result is not None and ok_jac:
             if self.verbose: print('Starting tests')
-            gauss_params = result.x
+            
+            gauss_params = result.x + var
             
             if tier("gold", cuts, deltas, outliers, result, early_data, bands, best_cut, self.verbose):
                 early_data, outliers, t_range, binned, y = self.analyze("gauss", early_data, result.x)
@@ -746,4 +755,6 @@ class Lightcurve(object):
             elif self.sn_name not in not_bronze and tier("bronze", cuts, deltas, outliers, result, early_data, bands, best_cut, self.verbose):
                 sn_tier = "bronze"
         
-        return pl_params, gauss_params, sn_tier
+            return pl_params, gauss_params, sn_tier
+        
+        return None, None, None
