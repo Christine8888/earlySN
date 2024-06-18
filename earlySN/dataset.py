@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 import math
 import sncosmo
+import os
 import ztfdr
 from ztfdr import release
 from astropy.cosmology import Planck18 as cosmo 
@@ -20,7 +21,7 @@ from astropy.cosmology import Planck18 as cosmo
 def avg_and_error(data, errs):
     err_weights = 1 / errs ** 2
     avg = np.average(data, weights = err_weights)
-    err = np.sqrt(1 / np.sum(errs))
+    err = np.sqrt(1 / np.sum(err_weights))
 
     return avg, err
 
@@ -36,7 +37,7 @@ def fit_mu(params, z, x_0, x_1, c, masses):
     c: size-N array of floats containing c values
     masses: size-N array of floats containing host galaxy masses
     """
-
+    
     alpha = params[0]
     beta = params[1]
     gamma = params[2]
@@ -49,7 +50,7 @@ def fit_mu(params, z, x_0, x_1, c, masses):
     mu_base = -2.5 * np.log10(x_0) + 10.635 + (alpha * x_1) - (beta * c) + gamma*m_shift
     
     # granular, z-dependent M_B
-    mu_base[(z>0) & (z <= 0.033)] -= bigM[0]
+    mu_base[(z > 0) & (z <= 0.033)] -= bigM[0]
     mu_base[(z > 0.033) & (z <= 0.067)] -= bigM[1]
     mu_base[(z > 0.067) & (z <= 0.1)] -= bigM[2]
     
@@ -68,7 +69,7 @@ def cost_mu(params, z, x_0, x_1, c, errors, cov, masses):
     cov: size-N array of 4x4 covariance matrices
     masses: size-N array of floats containing host galaxy masses
     """
-
+    
     expected = np.array(cosmo.distmod(z))
     fit = np.array(fit_mu(params[:6], z, x_0, x_1, c, masses))
     err = fit_sigma_mu2(params[:6], z, x_0, errors, cov, dint = params[6])
@@ -144,12 +145,29 @@ class Dataset(object):
                 self.data = pd.read_csv(base_path + '/data/yao_data.csv', index_col = 'SN')
                 self.params = pd.read_csv(base_path + '/data/yao_params.csv', index_col = 'SN')
                 self.masses = pd.read_csv(base_path + '/data/yao_masses.csv', index_col = 0).rename(columns = {'0': 'mass'})
-                self.pecs = pd.read_csv(base_path + '/data/yao_pvs.txt', index_col = 0).rename(columns = {'0': 'v'})
+                self.pecs = pd.read_csv(base_path + '/data/yao_pvs.txt', delimiter = ' ', index_col = 0).rename(columns = {'0': 'v'})
+            
             elif default == 'dhawan':
                 self.data = pd.read_csv(base_path + '/data/dhawan_data.csv', index_col = 'SN')
                 self.params = pd.read_csv(base_path + '/data/dhawan_params.csv', index_col = 'SN')
                 self.masses = pd.read_csv(base_path + '/data/dhawan_masses.csv', index_col = 0).rename(columns={'0': 'mass'})
-                self.pecs = pd.read_csv(base_path + '/data/dhawan_pvs.txt', index_col = 0).rename(columns = {'0': 'v'})
+                self.pecs = pd.read_csv(base_path + '/data/dhawan_pvs.txt', delimiter = ' ', index_col = 0).rename(columns = {'0': 'v'})
+            
+            elif default == "burke":
+                # Load in default gold/bronze tier lists from Burke et al. 2022b paper, + Yao et al. 2019 gold non-detections
+                print("Setting excess list for Burke et al. 2022b")
+
+                self.gold = ['ZTF18aaxsioa', 'ZTF18abcflnz', 'ZTF18abssuxz', 
+                        'ZTF18abxxssh', 'ZTF18aavrwhu', 'ZTF18abfhryc',]
+                self.bronze = ['ZTF18aawjywv', 'ZTF18aaqcozd', 'ZTF18abdfazk',
+                        'ZTF18abimsyv', 'ZTF18aazsabq']
+                self.excess = self.gold + self.bronze
+
+                self.gold_nd = ['ZTF18aavrzxp', 'ZTF18aazblzy', 'ZTF18abcysdx', 'ZTF18abetehf', 'ZTF18abxygvv']
+                
+                for i in self.sn_names:
+                    if i not in self.gold and i not in self.bronze:
+                        self.nd += [i]
 
         if path_to_data != None and path_to_params != None and index_col != None: # build dataset from path
             self.data = pd.read_csv(path_to_data, index_col = index_col)
@@ -162,16 +180,21 @@ class Dataset(object):
         
         self.hubble = None
         self.sn_names = pd.Series(self.data.index.unique()) # will hold all the valid SN
-
-    def fit_salt(self, save_path = None, verbose = False):
+        
+        self.N = pd.DataFrame(index = self.sn_names, columns=['N'])
+        
+    def fit_salt(self, save_fig = None, save_path = None, verbose = False):
         """ Fit SALT3 parameters (z, t0, x0, x1, c) to lightcurves in the Dataset using SNCosmo. Also performs dust extinction modeling. 
         
         Parameters:
         -----------
-        save_path: str, optional (default = None), path to directory to save SALT3 parameters and figures. If None, parameters will not be saved outside the instance
+        save_fig: str, optional (default = None), path to directory to save SALT3 figures. 
+        save_path: str, optional (default = None), path to directory to save SALT3 parameters. If None, parameters will not be saved outside the instance
         verbose: bool (default = True), if True, print progress and parameters"""
 
+        self.sn_names = self.sn_names  # CHANGE THIS BACK TO-DO
         self.hubble = pd.DataFrame(index = self.sn_names, columns = ['z', 't0', 'dt0', 'x0', 'dx0', 'x1', 'dx1', 'c', 'dc', 'fmax', 'cov'])
+        
         
         for i in range(len(self.sn_names)):
             sn = self.sn_names[i]
@@ -207,13 +230,13 @@ class Dataset(object):
             zp_sn = np.mean(self.data.loc[sn]['zp'])
             max_fluxes = {}
             for band in self.bands:
-                max_fluxes[band] = float(fitted_model.bandflux(band,result['parameters'][np.array(result['param_names']) == 't0'],zp_sn,'ab'))
+                max_fluxes[band] = float(fitted_model.bandflux('ztf{}'.format(band),result['parameters'][np.array(result['param_names']) == 't0'],zp_sn,'ab'))
             self.hubble.loc[sn, 'fmax'] = [max_fluxes]
             
             # Make lightcurve figure
-            if save_path is not None:
+            if save_fig is not None:
                 fig = sncosmo.plot_lc(tdata, model = fitted_model, errors = result.errors)
-                plt.savefig(save_path + "{}_{}_SALT3.pdf".format(self.name, sn), format='pdf', bbox_inches='tight')
+                plt.savefig(save_fig + "{}_{}_SALT3.pdf".format(self.name, sn), format='pdf', bbox_inches='tight')
                 plt.close()
             
             self.hubble['cov'] = self.hubble['cov'].astype(object)
@@ -240,7 +263,7 @@ class Dataset(object):
         
         params = ['x0', 'x1', 'c']
         for param in params:
-            print('{}: {{0:.3f}} $\pm$ {{0:.3f}}'.format(param, self.hubble[param].mean(), self.hubble[param].std()))
+            print('{}: {:0.3f} $\pm$ {:0.3f}'.format(param, self.hubble[param].mean(), self.hubble[param].std()))
         
         if return_vals:
             return np.array([[self.hubble[param].mean(), self.hubble[param].std()] for param in params])
@@ -256,27 +279,29 @@ class Dataset(object):
         # Load in spectra
         if self.name == 'yao' or self.name == "burke":
             ok_sn = ['normal   ', '91T-like ', '99aa-like']
-            spectra = self.params['Subtype']
+            self.spectra = self.params['Subtype']
         
         elif self.name == 'dhawan':
             ok_sn = ['SN Ia', 'SN Ia?','SN Ia-norm', 'SN Ia 91T-like', 'SN Ia 91T', 'SN-91T', 'SNIa-99aa']
             spectra = pd.read_csv(self.base_path + '/data/dhawan_data.csv', index_col=0)
-            spectra = spectra[4]
+            self.spectra = spectra[4]
         
         elif type(spectra) == str: # input is the name of a column in params
-            spectra = self.params[spectra]
+            self.spectra = self.params[spectra]
         
         elif spectra is None:
             print("No spectra included!")
             return
         
         # Remove all supernovae not satisfying spectral class requirements
-        iterate = reversed(range(len(self.sn_names)))
+        iterate = self.sn_names.index
         for i in iterate:
-            sn = self.sn_names.loc[i]
-            if spectra.loc[sn] not in ok_sn:
-                self.sn_names.drop(i)
-
+            sn = self.sn_names[i]
+            if self.spectra.loc[sn] not in ok_sn:
+                self.sn_names.drop(i, inplace=True)
+        
+        self.hubble = self.hubble.loc[self.sn_names]
+        
     
     def pv_correction(self):
         """ Correct velocities and redshifts based on input peculiar velocities
@@ -289,8 +314,7 @@ class Dataset(object):
             if type(pecs) == str:
                 pecs = self.params[pecs]
             
-            for i in range(len(self.sn_names)):
-                sn = self.sn_names[i]
+            for sn in self.sn_names:
                 pv = pecs.loc[sn]['vpec']
                 z_cmb = pecs.loc[sn]['zcmb']
                 self.hubble.loc[sn, 'z'] = (1.0 + z_cmb) / (1.0 + (pv / 3e8)) - 1.0
@@ -300,7 +324,7 @@ class Dataset(object):
 
         self.sn_names = pd.Series(self.data.index.unique())
 
-    def param_cuts(self, z_max = 0.1, min_points = 3, dx1_max = 1.0, dt0_max = 1.0, dc_max = 0.3, x1_max = 3.0, c_max = 0.3):
+    def param_cuts(self, z_max = 0.1, min_points = 3, dx1_max = 1.0, dt0_max = 1.0, dc_max = 0.3, x1_max = 3.0, c_max = 0.3, verbose = False):
         """ Remove SN from consideration (by removal from index self.sn_names). Default numbers are based off Dhawan et al. 2022 (https://arxiv.org/pdf/2110.07256)
         
         Parameters:
@@ -314,40 +338,48 @@ class Dataset(object):
         c_max: float (default = 0.3), maximum absolute value of c
         """
 
-        iterate = reversed(range(len(self.sn_names))) # work backwards to avoid indexing issues
+        iterate = self.sn_names.index # work backwards to avoid indexing issues
         for i in iterate:
             sn = self.sn_names.loc[i]
-            sn_data = self.hubble.loc[sn]
+            sn_data = self.data.loc[sn]
 
-            if sn_data['z'] > z_max:
-                self.sn_names.drop(i)
+            if self.hubble.loc[sn, 'z'] > z_max:
+                self.sn_names.drop(i, inplace=True)
+                print(sn, 'z')
                 continue
             
-            if len(sn_data[np.abs(sn_data['jd'] - self.hubble[sn, 't0']) < 10]) < min_points:
-                self.sn_names.drop(i)
+            if len(sn_data[np.abs(sn_data['jd'] - self.hubble.loc[sn, 't0']) < 10]) < min_points:
+                self.sn_names.drop(i, inplace=True)
+                print(sn, 'jd')
                 continue
             
-            if self.hubble[sn, 'dx1'] > dx1_max:
-                self.sn_names.drop(i)
+            if self.hubble.loc[sn, 'dx1'] > dx1_max:
+                self.sn_names.drop(i, inplace=True)
+                print(sn, 'dx1')
                 continue
 
-            if self.hubble[sn, 'dt0'] > dt0_max:
-                self.sn_names.drop(i)
+            if self.hubble.loc[sn, 'dt0'] > dt0_max:
+                self.sn_names.drop(i, inplace=True)
+                print(sn, 'dt0')
                 continue
 
-            if self.hubble[sn, 'dc'] > dc_max:
-                self.sn_names.drop(i)
+            if self.hubble.loc[sn, 'dc'] > dc_max:
+                self.sn_names.drop(i, inplace=True)
+                print(sn, 'dc')
                 continue
 
-            if self.hubble[sn, 'x1'] > x1_max or self.hubble[sn, 'x1'] < -1 * x1_max:
-                self.sn_names.drop(i)
+            if self.hubble.loc[sn, 'x1'] > x1_max or self.hubble.loc[sn, 'x1'] < -1 * x1_max:
+                self.sn_names.drop(i, inplace=True)
+                print(sn, 'x1')
                 continue
 
-            if self.hubble[sn, 'c'] > c_max or self.hubble[sn, 'x1'] < -1 * c_max:
-                self.sn_names.drop(i)
+            if self.hubble.loc[sn, 'c'] > c_max or self.hubble.loc[sn, 'c'] < -1 * c_max:
+                self.sn_names.drop(i, inplace=True)
+                print(sn, 'c')
                 continue
             
-
+        self.hubble = self.hubble.loc[self.sn_names]
+        
     def fit_Tripp(self, verbose = False, mass_step = True):
         """ Fit Tripp equation with optional host-galaxy mass step, get distance modulus (mu) by redshift (z), and compare to Planck18 cosmology.
         
@@ -358,13 +390,13 @@ class Dataset(object):
         """
         
         # Set up parameters for vectorized calculations
-        z = self.hubble.loc[self.sn_names, 'z'].to_numpy()
-        x_0 = self.hubble.loc[self.sn_names, 'x0'].to_numpy()
-        x_1 = self.hubble.loc[self.sn_names, 'x1'].to_numpy()
-        c = self.hubble.loc[self.sn_names, 'c'].to_numpy()
-        e = self.hubble.loc[self.sn_names, ['dt0', 'dx0', 'dx1', 'dc']].to_numpy()
-        cv = self.hubble.loc[self.sn_names, 'cov'].to_numpy() # check this
-        masses = self.masses.loc[self.sn_names, 'mass'].to_numpy()
+        z = self.hubble.loc[self.sn_names, 'z'].to_numpy(dtype=float)
+        x_0 = self.hubble.loc[self.sn_names, 'x0'].to_numpy(dtype=float)
+        x_1 = self.hubble.loc[self.sn_names, 'x1'].to_numpy(dtype=float)
+        c = self.hubble.loc[self.sn_names, 'c'].to_numpy(dtype=float)
+        e = self.hubble.loc[self.sn_names, ['dt0', 'dx0', 'dx1', 'dc']].to_numpy(dtype=float)
+        cv = np.array([cov[0] for cov in self.hubble["cov"]]).astype(float)
+        masses = self.masses.loc[self.sn_names, 'mass'].to_numpy(dtype=float)
 
         # Optimize initial fit
         if verbose: print('Fitting Hubble residuals')
@@ -388,9 +420,9 @@ class Dataset(object):
             for i in range(len(result.x)): # TO-DO: add in parameter names
                 result_string += param_names[i]
                 result_string += "= "
-                result_string += result.x[i]
+                result_string += str(result.x[i])
                 result_string += " $\pm$ "
-                result_string += errs[i]
+                result_string += str(errs[i])
                 result_string += " $\pm$, "
             print('Tripp parameters: {}'.format(result_string))
 
@@ -399,39 +431,42 @@ class Dataset(object):
 
         return result, mu, mu_errs
 
-    def fit_hubble(self, save_path = None, savefig = None, verbose = False, mass_step = True, outlier_cut = 5.0):
+    def fit_hubble(self, save_path = None, verbose = False, mass_step = True, outlier_cut = 4.0):
         """ Fit for Hubble residuals, including sample cuts, Tripp modeling, and outlier rejection.
         
         Parameters:
         -----------
-        save_path: str, optional (default = None), path to directory to save SALT3 parameters. If None, parameters will not be saved outside the instance
-        save_path: str, optional (default = None), path to directory to save figures. If None, no figures will be saved
+        save_path: str, optional (default = None), path to directory to save Hubble parameters and figures. If None, parameters will not be saved outside the instance
         verbose: bool (default = True); if True, print progress and parameters
         mass_step: bool (default = True), option to model host-galaxy mass step; if False, default range for parameter gamma is set to [-0.01, 0.01]
         outlier_cut: float (default = 5.0), minimum sigma difference from Planck18 distance modulus to label supernova as outlier
         """
 
-        # TO-DO: build parameter cuts (?) directly into this function
-
-        result, mu, mu_errs = self.fit_Tripp(verbose = verbose, mass_step = mass_step)
-        z = self.hubble.loc[self.sn_names, 'z'].to_numpy()
+        result, mu, mu_errs = self.fit_Tripp(verbose = False, mass_step = mass_step)
 
         # Calculate and report outliers
+        z = self.hubble.loc[self.sn_names, 'z'].to_numpy(dtype=float)
         mu_resids = np.array(mu) - np.array(cosmo.distmod(z))
         mu_resids /= mu_errs
-
-        if verbose: print('Outliers: ', list(self.sn_names[np.abs(mu_resids) > outlier_cut].index))
-        self.sn_names = self.sn_names[np.abs(mu_resids) < outlier_cut]
+        
+        
+        outlier_cut = np.abs(mu_resids) > outlier_cut
+        if verbose: print('Outliers: ', self.sn_names[list(self.sn_names[outlier_cut].index)])
+        self.sn_names = self.sn_names[~outlier_cut]
+        self.hubble = self.hubble.loc[self.sn_names]
         if verbose: print("Repeating Tripp fit without outliers")
 
         # Repeat analysis without outliers
-        result, mu, mu_errs = self.fit_Tripp()
-
-        if savefig is not None:
+        result, mu, mu_errs = self.fit_Tripp(verbose = verbose, mass_step = mass_step)
+        
+        z = self.hubble.loc[self.sn_names, 'z'].to_numpy(dtype=float)
+        if save_path is not None:
             plt.errorbar(z, mu, yerr = mu_errs, fmt='o', markersize=3, label='ZTF18')#, yerr=mu_errs)
             plt.plot(np.sort(z), cosmo.distmod(np.sort(z)), label='Planck18')
+            plt.xlabel('z')
+            plt.ylabel('$\mu$')
             plt.legend()
-            plt.savefig(savefig + '/{}_hubble_diagram.pdf'.format(self.name))
+            plt.savefig(save_path + '/{}_hubble_diagram.pdf'.format(self.name))
 
         # Save distance moduli (mu) and uncertainties (mu_errs)
         self.hubble.loc[self.sn_names, 'mu'] = mu
@@ -440,14 +475,21 @@ class Dataset(object):
         if save_path is not None:
             self.hubble.loc[self.sn_names].to_csv(save_path + '{}_hubble.csv')
 
-    def excess_search(self, save_path = None):
+    def excess_search(self, save_path = None, save_fig = None, verbose = False):
+        """ Search for lightcurves with early excess. To be applied after Hubble fitting and parameter cuts
+        
+        Parameters:
+        -----------
+        save_path: str, optional (default = None); path to directory to save lightcurve parameters. If None, parameters will not be saved outside the instance
+        save_fig: str, optional (default = None); path to directory to save lightcurve figures.
+        verbose: bool (default = False); if True, print progress and parameters
+        """
+
         targets = self.sn_names
         self.gauss_params = pd.DataFrame(index = targets, columns=['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'mu', 'sigma', 'C_r', 'C_g', 'B_r', 'B_g',
                                                                    'dt_exp', 'dA_r', 'dA_g', 'dalpha_r', 'dalpha_g', 'dmu', 'dsigma', 'dC_r', 'dC_g', 'dB_r', 'dB_g'])
         self.pl_params = pd.DataFrame(index = targets, columns=['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'B_r', 'B_g',
                                                                 'dt_exp', 'dA_r', 'dA_g', 'dalpha_r', 'dalpha_g', 'dB_r', 'dB_g'])
-        
-        self.N = pd.DataFrame(index = targets, columns=['N'])
 
         self.gold = []
         self.gold_nd = []
@@ -460,21 +502,24 @@ class Dataset(object):
             not_bronze = ['ZTF18aaunfqq', 'ZTF18aaxwjmp', 'ZTF18abbpeqo', 'ZTF18aazblzy', 'ZTF18abfhaji', 'ZTF18abjstcm', 'ZTF18abjvhec', 'ZTF18abwmuua', 'ZTF18abxygvv']
 
         # initialize way to save
-        for sn in targets:
+        for sn in targets: 
+            if verbose: print('Fitting {}'.format(sn))
             if sn not in not_bronze:
                 data = self.data.loc[sn]
-                data = data[data['flux'] > data['flux_err'] > -2] # remove large negative outliers
+                data = data[data['flux'] / data['flux_err'] > -2] # remove large negative outliers
                 
                 params = self.hubble.loc[sn]
-                fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_path = None, verbose = False)
-                pl_params, gauss_params, classification, self.N[sn] = fit.excess_search()
                 
+                fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_fig = save_fig, verbose = verbose)
+                pl_params, gauss_params, classification, self.N[sn] = fit.excess_search()
+
                 # Update fit parameters
                 if pl_params is not None:
                     self.pl_params.loc[sn] = pl_params
                 if gauss_params is not None:
                     self.gauss_params.loc[sn] = gauss_params
 
+                
                 # add to the appropriate list
                 if classification == "gold":
                     self.gold += [sn]
@@ -498,31 +543,38 @@ class Dataset(object):
             with open(save_path + '/{}_bronze.txt'.format(self.name), 'w') as f:
                 for line in self.bronze:
                     f.write(f"{line}\n")
+            
+            if save_path is not None:
+                self.gauss_params.to_csv(save_path + '{}_gauss_params.csv')
+                self.pl_params.to_csv(save_path + '{}_pl_params.csv')
 
     # basically all of this is from the notebook -- NOTE TO SELF
-    def compare_excess(self):
+    def compare_excess(self, save_fig = None):
         mu = self.hubble['mu']
         mu_errs = self.hubble['dmu']
         z = self.hubble['z']
 
-        color = ["red" if sn in self.gold else "black" for sn in self.sn_names]
-        color = pd.DataFrame({"SN": self.sn_names, "color": color}).set_index("SN", inplace=True)['color'] 
-        alpha = [1 if sn in self.gold else 0.3 for sn in self.sn_names]
-        alpha = alpha.astype(np.float)
-        alpha = pd.DataFrame({"SN": self.sn_names, "alpha": alpha}).set_index("SN", inplace=True)['alpha']
+        # color = ["red" if sn in self.gold else "black" for sn in self.sn_names]
+        # color = pd.DataFrame({"SN": self.sn_names, "color": color}).set_index("SN")["color"]
+        
+        # alpha = [1 if sn in self.gold else 0.3 for sn in self.sn_names]
+        # alpha = np.array(alpha, dtype=float)
+        # alpha = pd.DataFrame({"SN": self.sn_names, "alpha": alpha}).set_index("SN")['alpha']
 
-        # Plot for Final Article
-        y = mu * u.mag - (cosmo.distmod(z))
+        self.hubble['distmod'] = z.apply(cosmo.distmod)
+        y = self.hubble.apply(lambda row: ((row['mu'] * u.mag) - (row['distmod'])).value, axis=1)
         fig, ax = plt.subplots(1,2, figsize=(10,5),width_ratios=[3,1],sharey=True)
 
-        offset = np.average(y, weights=1/mu_errs**2).value
+        offset = np.average(y, weights=1/mu_errs**2)
 
         for sn in self.sn_names:
             if sn in self.gold:
-                ax[0].errorbar(z[sn], y[sn], yerr = mu_errs[sn] * u.mag, markersize = 9, c = 'gold', zorder = 10, marker = 's', capsize = 5)
+                ax[0].errorbar(z[sn], y[sn], yerr = mu_errs[sn], markersize = 9, c = 'gold', zorder = 10, marker = 's', capsize = 5)
+            elif sn in self.bronze:
+                ax[0].errorbar(z[sn], y[sn], yerr = mu_errs[sn], fmt = 'o', markersize = 9, c = 'red', zorder = 10,  capsize = 5)
             else:
-                ax[0].errorbar(z[sn], y[sn], yerr = mu_errs[sn] * u.mag, fmt = 'o', alpha = alpha[sn], markersize = 9, color = color[sn], capsize=5)
-            
+                ax[0].errorbar(z[sn], y[sn], yerr = mu_errs[sn], fmt = 'o', alpha = 0.3, markersize = 9, color = 'k', capsize=5)
+        
             
         ax[0].axhline(y=offset, ls='--', c='b')#np.sort(z), np.ones(len(z))*offset,
 
@@ -570,8 +622,9 @@ class Dataset(object):
 
         ax[0].set_ylabel('$\mu_{SALT3} - \mu_{\Lambda_{CDM}}$ (mag)')
         ax[0].set_xlabel('z')
-
-        plt.savefig(+'./{}_hubble.pdf'.format(self.name), bbox_inches = 'tight', pad_inches = 0)
+        
+        if save_fig is not None:
+            plt.savefig(+ './{}_hubble.pdf'.format(self.name), bbox_inches = 'tight', pad_inches = 0)
 
     def load_tiers(self):
         burke_gold = ['ZTF18aaxsioa', 'ZTF18abcflnz', 'ZTF18abssuxz', 
@@ -601,7 +654,7 @@ class Dataset(object):
         std = np.std(self.masses)[0]
 
         gold_avg, gold_err = mass_statistics(self.gold, self.masses)
-        nd_avg, nd_err = mass_statistics(self.gold, self.masses)
+        nd_avg, nd_err = mass_statistics(self.gold_nd, self.masses)
         excess_avg, excess_err = mass_statistics(self.excess, self.masses)
         noexcess_avg, noexcess_err = mass_statistics(self.nd, self.masses)
         
@@ -650,8 +703,9 @@ class Dataset(object):
 
         gauss_params = self.gauss_params.loc[self.excess]
 
-        bump_r = lightcurve.flux_from_amp(gauss_params["mu"], gauss_params["sigma"], gauss_params["C_r"])
-        bump_g = lightcurve.flux_from_amp(gauss_params["mu"], gauss_params["sigma"], gauss_params["C_g"])
+        # CHANGE THIS BACK TO-DO
+        bump_r = flux_from_amp(gauss_params["mu"], gauss_params["sigma"], gauss_params["C_r"])
+        bump_g = flux_from_amp(gauss_params["mu"], gauss_params["sigma"], gauss_params["C_g"])
         err_r = gauss_params["C_r"] / gauss_params["dC_r"] 
         err_g = gauss_params["C_g"] / gauss_params["dC_g"]
 
@@ -792,16 +846,34 @@ class Dataset(object):
             noexcess_err = np.sqrt(1 / np.sum(1 / err_weights))
             print('No Excess $x_1$: ', noexcess_avg, noexcess_err)
     
-    def save_all(self):
-        # need: to be able to pick up from 'wherever we left off'
-        print("Not yet implemented")
+    def load_from_saved(self, save_path):
+        self.hubble = pd.read_csv(save_path + '{}_hubble.csv', index_col='SN')
+        print('Loaded Hubble diagram parameters')
+        
+        if os.path.exists(save_path + '{}_gold.txt'.format(self.name)):
+            print('Loaded excess search results')
+            with open(save_path + '{}_gold.txt'.format(self.name), 'r') as f:
+                self.gold = [line.strip() for line in f.readlines()]
+                
+            with open(save_path + '{}_gold_nd.txt'.format(self.name), 'r') as f:
+                self.gold_nd = [line.strip() for line in f.readlines()]
 
-    def make_table(self):
+            with open(save_path + '{}_bronze.txt'.format(self.name), 'r') as f:
+                self.bronze = [line.strip() for line in f.readlines()]
+
+        if os.path.exists(save_path + '{}_gauss_params.csv'.format(self.name)):
+            print('Loaded lightcurve fit parameters')
+            self.gauss_params = pd.read_csv(save_path + '{}_gauss_params.csv', index_col = 0)
+            self.pl_params = pd.read_csv(save_path + '{}_pl_params.csv', index_col = 0)
+        
+
+    def make_paper_table(self):
         print("Not yet implemented")
 
     def end_to_end(self, verbose, save_path):
         # Processing steps
         self.fit_salt(verbose, save_path)
+        self.salt_stats()
         self.spectral_filter()
         self.pv_correction()
         self.param_cuts()

@@ -268,14 +268,14 @@ def tier(type, cuts, deltas, outliers, result, early_data, bands, best_cut, verb
         # Reject samples without enough data within 2-sigma of Gaussian peak
         minus2 = result.x[0] + result.x[1 + n * 2] - 2 * result.x[2 + n * 2]
         plus2 = result.x[0] + result.x[1 + n * 2] + 2 * result.x[2 + n * 2]
-        in_gauss = [np.logical_and(binned[band][:, 0] >= minus2, binned[band][:, 0] <= plus2)]
+        in_gauss = np.logical_and(binned[band][:, 0] >= minus2, binned[band][:, 0] <= plus2)
 
         if binned[band][in_gauss].shape[0] < criteria['min_2sigma']: 
             if verbose: print('No data within 2sigma of excess')
             return False
         
         # Reject samples without enough data before explosions
-        pre_peak = [binned[band][:,0] < result.x[0]]
+        pre_peak = binned[band][:,0] < result.x[0]
         if binned[band][pre_peak].shape[0] < criteria['min_preexp']:
             if verbose: print('Not enough pre explosion data.')
             return False
@@ -353,13 +353,13 @@ def nd(cuts, deltas, outliers, result, early_data, bands, best_cut, verbose):
             return False
         
         binned[i] = weighted_average(band_dat)
-        in_early = [np.logical_and(binned[i][:,0] > result.x[0], binned[i][:,0] < result.x[0] + 5)]
+        in_early = np.logical_and(binned[i][:,0] > result.x[0], binned[i][:,0] < result.x[0] + 5)
         avg_errors[bands.index(i)] = np.mean(binned[i][in_early][:,2])
         if binned[i][in_early].shape[0] < 2:
             if verbose: print('No data in early region')
             return False
         
-        pre_peak = [binned[i][:,0] < result.x[0]]
+        pre_peak = binned[i][:,0] < result.x[0]
         if binned[i][pre_peak].shape[0] < 2:
             if verbose: print('Not enough pre explosion data.')
             return False        
@@ -413,12 +413,11 @@ class Lightcurve(object):
         where N is the number of data points between peak and peak - 45 days."""
         
         for band in self.bands:
-            self.data_by_band[band] = self.data[self.data['band'] =='p48{}'.format(band)]
+            self.data_by_band[band] = self.data[self.data['band'] =='ztf{}'.format(band)]
 
             # Format of list -- 0: MJD, 1: flux, 2: flux error
             self.data_by_band[band] = np.array((self.data_by_band[band]['jd'], self.data_by_band[band]['flux'], self.data_by_band[band]['flux_err'])).T
-            self.data_by_band[band] = self.data_by_band[band][early_range]
-
+            
             # Make initial cuts
             peak_jd = self.params['t0']
             early_range = np.logical_and(self.data_by_band[band][:,0] < peak_jd, self.data_by_band[band][:,0] > peak_jd - 45)
@@ -448,15 +447,13 @@ class Lightcurve(object):
                 guess_amp[band] /= (max(early_data[band][:,0]) - min(early_data[band][:,0])) ** 2 # max time difference
                 guess_amp[band] = max(guess_amp[band], 500) # set max cutoff
             else:
-                self.guess_amp[band] = 50
+                guess_amp[band] = 50
 
         # Avoid fitting light curves with insuffiient data
         total_size = np.sum([early_data[band].shape[0] for band in self.bands])
         if total_size <= 10:
             print('Not enough data points.')
-            return None, None, None
-    
-        if self.verbose: print('Starting fit...')
+            return None, None
         
         args = (early_data, self.bands)
         n = len(self.bands)
@@ -466,7 +463,7 @@ class Lightcurve(object):
         pl_max = 3
         if self.pl_bounds is not None:
             pl_min, pl_max = self.pl_bounds
-            pl_guess = (pl_min + pl_max) / 2
+        pl_guess = (pl_min + pl_max) / 2
 
         # Optimize parameters by model
         if model == 'powerlaw':
@@ -486,7 +483,7 @@ class Lightcurve(object):
         
         else:
             print('Oops, not implemented yet!')
-            return None, None, None
+            return None, None
         
         return result, early_data
     
@@ -500,9 +497,9 @@ class Lightcurve(object):
         """
 
         bics = np.zeros(len(models))
-        
+        bands = self.bands
         for i in range(len(models)):
-            result, early_data, bands = self.fit_model(self.sn_name, cut = cut, model = models[i])
+            result, early_data = self.fit_model(cut = cut, model = models[i])
             n = len(bands)
 
             # Fit failed
@@ -582,7 +579,11 @@ class Lightcurve(object):
         fit_params: array of parameter values, likely from result.x
         """
 
+        binned = {}
+        binned_y = {}
+        rise_y = {}
         outliers = {}
+        t_range = {}
         n = len(self.bands)
         for band in self.bands: outliers[band] = 0
 
@@ -593,8 +594,8 @@ class Lightcurve(object):
             
             if early_data[band].shape[0] >= 2:
                 # Bin data by date and set date range
-                binned = weighted_average(early_data[band])
-                t_range = np.linspace(np.min(early_data[band][:,0]), np.max(early_data[band][:,0]))
+                binned[band] = weighted_average(early_data[band])
+                t_range[band] = np.linspace(np.min(early_data[band][:,0]), np.max(early_data[band][:,0]))
                 
                 if model == 'powerlaw':
                     # [t0] + [n x amps] + [n x slopes] + [n x offsets]
@@ -603,11 +604,11 @@ class Lightcurve(object):
                     slope = fit_params[1 + n + i]
                     offset = fit_params[1 + n * 2 + i]
 
-                    rise_y = [pl_rise_model(t_range, t_rise, amp, slope, offset)]
-                    binned_y = [pl_rise_model(binned[:,0], t_rise, amp, slope, offset)]
+                    rise_y[band] = [pl_rise_model(t_range[band], t_rise, amp, slope, offset)]
+                    binned_y[band] = [pl_rise_model(binned[band][:,0], t_rise, amp, slope, offset)]
 
-                    resid_diff = binned[:,1] - binned_y[0]
-                    outliers[band] = identify_excess(resid_diff, binned[:,2])
+                    resid_diff = binned[band][:,1] - binned_y[band][0]
+                    outliers[band] = identify_excess(resid_diff, binned[band][:,2])
 
                 elif model == 'gauss':
                     # [t0] + [n x amps] + [n x slopes] + [mu, sigma] + [n x amps] + [n x offsets]
@@ -619,22 +620,22 @@ class Lightcurve(object):
                     gauss_amp = fit_params[3 + 2 * n + i]
                     offset = fit_params[3 + 3 * n + i]
 
-                    rise_y = [gauss_rise_model(t_range, t_rise, amp, slope, mu, sigma, 0, offset),
-                            gauss_rise_model(t_range, t_rise, 0, slope, mu, sigma, gauss_amp, offset),
-                            gauss_rise_model(t_range, t_rise, amp, slope, mu, sigma, gauss_amp, offset)]
+                    rise_y[band] = [gauss_rise_model(t_range[band], t_rise, amp, slope, mu, sigma, 0, offset),
+                            gauss_rise_model(t_range[band], t_rise, 0, slope, mu, sigma, gauss_amp, offset),
+                            gauss_rise_model(t_range[band], t_rise, amp, slope, mu, sigma, gauss_amp, offset)]
 
-                    binned_y = [gauss_rise_model(binned[:,0], t_rise, amp, slope, mu, sigma, gauss_amp, offset),
-                                gauss_rise_model(binned[:,0], t_rise, amp, slope, mu, sigma, 0, offset)]
+                    binned_y[band] = [gauss_rise_model(binned[band][:,0], t_rise, amp, slope, mu, sigma, gauss_amp, offset),
+                                gauss_rise_model(binned[band][:,0], t_rise, amp, slope, mu, sigma, 0, offset)]
                     
-                    resid_diff = binned_y[0] - binned_y[1]
-                    outliers[band] = identify_excess(resid_diff, binned[:,2])
+                    resid_diff = binned_y[band][0] - binned_y[band][1]
+                    outliers[band] = identify_excess(resid_diff, binned[band][:,2])
                 
                 else:
                     print('Oops, not yet implemented.')
             
-            if self.verbose: print(outliers)   
-
-            return early_data, outliers, t_range, binned, (rise_y, binned_y)
+        if self.verbose: print(outliers) # TO-DO: TURN OFF?  
+        
+        return early_data, outliers, t_range, binned, (rise_y, binned_y)
     
     def plot(self, early_data, t_range, binned, y):
         """ Plot lightcurve and model fit
@@ -650,16 +651,18 @@ class Lightcurve(object):
         rise_y, binned_y = y
         fig, ax = plt.subplots(len(self.bands), 2, figsize=(4 * len(self.bands), 8))
 
+        
         for band in self.bands:
             i = self.bands.index(band)
-            ax[i,0].errorbar(early_data[:,0], early_data[:,1], yerr = early_data[:,2], 
+            ax[i,0].errorbar(early_data[band][:,0], early_data[band][:,1], yerr = early_data[band][:,2], 
                                     fmt='o',color = band, markersize = 3) 
                     
             styles = ['--', '-.', '-']
             labels = ['PL', 'Gaussian', 'Total']
 
-            for j in range(len(rise_y)):
-                ax[i,0].plot(t_range, rise_y[j], label='{} fit'.format(labels[j]),color=band, ls=styles[j])
+            for j in range(len(rise_y[band])):
+                
+                ax[i,0].plot(t_range[band], rise_y[band][j], label='{} fit'.format(labels[j]),color=band, ls=styles[j])
 
 
             ax[i,0].set_xlabel('JD since First Light')
@@ -670,8 +673,8 @@ class Lightcurve(object):
             labels = ['all', 'just PL']
             alphas = [1, 0.3]
 
-            for j in range(len(binned_y)): # plot binned points
-                ax[i,1].errorbar(binned[:,0], (binned[:,1] - binned_y[j])/binned[:,2], 
+            for j in range(len(binned_y[band])): # plot binned points
+                ax[i,1].errorbar(binned[band][:,0], (binned[band][:,1] - binned_y[band][j])/binned[band][:,2], 
                             fmt = 'o', alpha = alphas[j], marker = markers[j], color = band, label = '{}'.format(labels[j]), markersize = 6)
 
 
@@ -684,7 +687,7 @@ class Lightcurve(object):
             if self.save_fig:
                 plt.savefig('{}_rise.pdf'.format(self.sn_name))
 
-    def excess_search(self, pl_bounds = None, not_bronze = []):
+    def excess_search(self, pl_bounds = None, not_bronze = [], default_cut = 10, best_cut = None):
         """ Search for an early excess in the light curve.
         
         Parameters
@@ -697,20 +700,20 @@ class Lightcurve(object):
         pl_params = None
         gauss_params = None
 
-        result, early_data = self.fit_model("gauss")
+        result, early_data = self.fit_model(cut = default_cut, model = "gauss")
 
         if result is None:
             if self.verbose: print('Fit failed.')
-            return None  
+            return None, None, None, None
             
-        cuts, deltas, all_outliers = self.bic_range(['powerlaw', 'gauss'], bands, plot = False)
+        cuts, deltas, outliers = self.bic_range(['powerlaw', 'gauss'], self.bands, plot = False)
         reasonable = deltas > -150
         if np.sum(reasonable) < 2:
             if self.verbose: print('Unreasonable.')
-            return None      
+            return None, None, None, None      
         
         # Compute parameters for power law with default cut
-        result, early_data, bands = self.fit_model(cut = 10, model = 'powerlaw')
+        result, early_data = self.fit_model(cut = 10, model = 'powerlaw')
         if result is not None:
             try:
                 J = result.jac
@@ -719,12 +722,15 @@ class Lightcurve(object):
             except:
                 var = np.zeros(len(result.x))
             
-            pl_params = result.x + var
+            pl_params = list(result.x) + list(var)
 
         # Compute Gauss+PL parameters for best fit
-        best_cut = cuts[reasonable][np.argsort(deltas[reasonable])[0]]
+        
+        if best_cut == None:
+            best_cut = cuts[reasonable][np.argsort(deltas[reasonable])[0]]
+        
         if self.verbose: print('Best Cut: ', best_cut)   
-        result, early_data, bands = self.fit_model(cut = best_cut, model = 'gauss')
+        result, early_data = self.fit_model(cut = best_cut, model = 'gauss')
         
         # check that Jacobian is invertible
         ok_jac = True
@@ -742,19 +748,19 @@ class Lightcurve(object):
         if result is not None and ok_jac:
             if self.verbose: print('Starting tests')
             
-            gauss_params = result.x + var
+            gauss_params = list(result.x) + list(var)
             
-            if tier("gold", cuts, deltas, outliers, result, early_data, bands, best_cut, self.verbose):
+            if tier("gold", cuts, deltas, outliers, result, early_data, self.bands, best_cut, self.verbose):
                 early_data, outliers, t_range, binned, y = self.analyze("gauss", early_data, result.x)
                 self.plot(early_data, t_range, binned, y)
                 sn_tier = "gold"
             
-            elif nd(cuts, deltas, outliers, result, early_data, bands, best_cut, self.verbose):
+            elif nd(cuts, deltas, outliers, result, early_data, self.bands, best_cut, self.verbose):
                 sn_tier = "gold_nd"
             
-            elif self.sn_name not in not_bronze and tier("bronze", cuts, deltas, outliers, result, early_data, bands, best_cut, self.verbose):
+            elif self.sn_name not in not_bronze and tier("bronze", cuts, deltas, outliers, result, early_data, self.bands, best_cut, self.verbose):
                 sn_tier = "bronze"
         
-            return pl_params, gauss_params, sn_tier
+            return pl_params, gauss_params, sn_tier, best_cut
         
-        return None, None, None
+        return None, None, None, None
