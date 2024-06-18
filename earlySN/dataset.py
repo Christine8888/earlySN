@@ -19,11 +19,33 @@ from astropy import units as u
 from astropy.cosmology import Planck18 as cosmo
 
 def avg_and_error(data, errs):
+    """
+    Calculate weighted average and standard error.
+
+    Parameters:
+    -----------
+    data: array-like, data to average
+    errs: array-like, uncertainties on data
+    """
+
     err_weights = 1 / errs ** 2
     avg = np.average(data, weights = err_weights)
     err = np.sqrt(1 / np.sum(err_weights))
 
     return avg, err
+
+def flux_from_amp(row, mu = 'mu', sigma = 'sigma', amp = 'amp'):
+    """ Calculate the peak flux of a Gaussian from mu, sigma, and amplitude.
+    
+    Parameters:
+    ----------
+    row: pandas DataFrame row containing lightcurve parameters
+    mu: string, column name for mu
+    sigma: string, column name for sigma
+    amp: string, column name for amplitude
+    """
+
+    return stats.norm.pdf(row[mu], loc = row[mu], scale = row[sigma]) * row[amp]
 
 def fit_mu(params, z, x_0, x_1, c, masses):
     """ Calculate mu based on Tripp equation and SALT3 parameters.
@@ -102,15 +124,26 @@ def fit_sigma_mu2(params, z, x_0, errors, cov, pec = 250.0, dint = 0.1):
     
     return err
 
-def mass_statistics(sn_names, masses):
-    std = np.std(masses.loc[sn_names].dropna())[0]
-    avg = np.average(masses.loc[sn_names].dropna())
-    err = std * np.sqrt(1/masses.loc[sn_names].dropna().shape[0])
-    print(masses.loc[sn_names].dropna().shape[0])
-    return avg, err 
+def table_errs(mu, sigma):
+    """Print out LaTeX-formatted values with rounded uncertainty.
+    
+    Parameters:
+    ----------
+    mu: float, mean value
+    sigma: float, standard deviation"""
+
+    n_decimal = int(np.floor(np.log10(np.abs(sigma))) * -1)
+    n_dig = int(np.floor(np.log10(np.abs(mu))) * -1)
+    diff = int(n_decimal - n_dig) 
+    
+    if n_decimal > 3:
+        return '${} \pm {} \\times 10^{{ {} }}$'.format(np.round(mu * 10**(n_dig), decimals=diff), np.round(sigma * 10**(n_dig), decimals = diff), -1 * n_dig)
+    
+    else:
+        return '${} \pm {}$'.format(np.round(mu, n_decimal), np.round(sigma, n_decimal))
 
 class Dataset(object):
-    def __init__(self, base_path, bands, default = None, path_to_data = None, path_to_params = None, path_to_masses = None, index_col = None, name = ""):
+    def __init__(self, base_path, bands, default = None, path_to_data = None, path_to_params = None, path_to_masses = None, path_to_pecs = None, index_col = None, name = ""):
         """ Constructor for the Dataset object, with option to use default built-in datasets or upload data from files. 
         To create a Dataset object, user must either use a default option or provide paths to all necessary files.
         
@@ -121,6 +154,8 @@ class Dataset(object):
         default: str, "yao" (for Yao et al. 2019) or "dhawan" (for Dhawan et al. 2022) or "burke" (for Burke et al. 2022b)
         path_to_data: str, system path to lightcurve data
         path_to_params: str, system path to lightcurve params
+        path_to_masses: str, system path to host galaxy masses
+        path_to_pecs: str, system path to peculiar velocities
         index_col: str or int, column to use as DataFrame index
         name: str, ID for Dataset """
 
@@ -141,6 +176,7 @@ class Dataset(object):
 
         if default != None: # build dataset from default sample
             self.name = default
+            
             if default == 'yao' or default == "burke":
                 self.data = pd.read_csv(base_path + '/data/yao_data.csv', index_col = 'SN')
                 self.params = pd.read_csv(base_path + '/data/yao_params.csv', index_col = 'SN')
@@ -156,7 +192,6 @@ class Dataset(object):
             elif default == "burke":
                 # Load in default gold/bronze tier lists from Burke et al. 2022b paper, + Yao et al. 2019 gold non-detections
                 print("Setting excess list for Burke et al. 2022b")
-
                 self.gold = ['ZTF18aaxsioa', 'ZTF18abcflnz', 'ZTF18abssuxz', 
                         'ZTF18abxxssh', 'ZTF18aavrwhu', 'ZTF18abfhryc',]
                 self.bronze = ['ZTF18aawjywv', 'ZTF18aaqcozd', 'ZTF18abdfazk',
@@ -172,11 +207,18 @@ class Dataset(object):
         if path_to_data != None and path_to_params != None and index_col != None: # build dataset from path
             self.data = pd.read_csv(path_to_data, index_col = index_col)
             self.params = pd.read_csv(path_to_params, index_col = index_col)
+            
             if path_to_masses != None:
                 self.masses = pd.read_csv(path_to_masses, index_col = index_col)
             else:
                 self.masses = None
-                print('No masses found!')
+                print('No PVs found!')
+            
+            if path_to_pecs != None:
+                self.pecs = pd.read_csv(path_to_pecs, index_col = index_col)
+            else:
+                self.pecs = None
+                print('No PVs found!')
         
         self.hubble = None
         self.sn_names = pd.Series(self.data.index.unique()) # will hold all the valid SN
@@ -268,14 +310,16 @@ class Dataset(object):
         if return_vals:
             return np.array([[self.hubble[param].mean(), self.hubble[param].std()] for param in params])
 
-    def spectral_filter(self, spectra = None, ok_sn = ['SN Ia']):
+    def spectral_filter(self, spectra = None, ok_sn = ['SN Ia'], verbose = False):
         """ Load and apply a spectral type filter to the dataset's supernova. Usually should keep only normal SN Ia, rejecting peculiar spectral types.
         
         Parameters:
         -----------
         spectra: pandas Series or str, optional. If Series, index should match SN names. If str, spectra should indicate the column in self.params that contains the spectra.
-        ok_sn: List(str) of spectral class labels that are OK. Any other SN will be rejected"""
+        ok_sn: List(str) of spectral class labels that are OK. Any other SN will be rejected
+        verbose: bool, optional. If True, print out SN names that are rejected."""
 
+        if verbose: print("Applying spectral filter.")
         # Load in spectra
         if self.name == 'yao' or self.name == "burke":
             ok_sn = ['normal   ', '91T-like ', '99aa-like']
@@ -295,11 +339,14 @@ class Dataset(object):
         
         # Remove all supernovae not satisfying spectral class requirements
         iterate = self.sn_names.index
+        drop_count = 0
         for i in iterate:
             sn = self.sn_names[i]
             if self.spectra.loc[sn] not in ok_sn:
                 self.sn_names.drop(i, inplace=True)
+                drop_count += 1
         
+        if verbose: print("Dropped {} SN".format(drop_count))
         self.hubble = self.hubble.loc[self.sn_names]
         
     
@@ -511,7 +558,7 @@ class Dataset(object):
                 params = self.hubble.loc[sn]
                 
                 fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_fig = save_fig, verbose = verbose)
-                pl_params, gauss_params, classification, self.N[sn] = fit.excess_search()
+                pl_params, gauss_params, classification, self.N.loc[sn, 'N'] = fit.excess_search()
 
                 # Update fit parameters
                 if pl_params is not None:
@@ -547,26 +594,23 @@ class Dataset(object):
             if save_path is not None:
                 self.gauss_params.to_csv(save_path + '{}_gauss_params.csv')
                 self.pl_params.to_csv(save_path + '{}_pl_params.csv')
-
-    # basically all of this is from the notebook -- NOTE TO SELF
+    
+    
     def compare_excess(self, save_fig = None):
-        mu = self.hubble['mu']
+        """ Compare excess and non-excess populations across Hubble residuals.
+        
+        Parameters:
+        -----------
+        save_fig: str, optional (default = None), path to directory to save resulting figure."""
+
+        # Compute Hubble residuals
         mu_errs = self.hubble['dmu']
         z = self.hubble['z']
-
-        # color = ["red" if sn in self.gold else "black" for sn in self.sn_names]
-        # color = pd.DataFrame({"SN": self.sn_names, "color": color}).set_index("SN")["color"]
-        
-        # alpha = [1 if sn in self.gold else 0.3 for sn in self.sn_names]
-        # alpha = np.array(alpha, dtype=float)
-        # alpha = pd.DataFrame({"SN": self.sn_names, "alpha": alpha}).set_index("SN")['alpha']
-
         self.hubble['distmod'] = z.apply(cosmo.distmod)
         y = self.hubble.apply(lambda row: ((row['mu'] * u.mag) - (row['distmod'])).value, axis=1)
         fig, ax = plt.subplots(1,2, figsize=(10,5),width_ratios=[3,1],sharey=True)
 
-        offset = np.average(y, weights=1/mu_errs**2)
-
+        # Scatter points
         for sn in self.sn_names:
             if sn in self.gold:
                 ax[0].errorbar(z[sn], y[sn], yerr = mu_errs[sn], markersize = 9, c = 'gold', zorder = 10, marker = 's', capsize = 5)
@@ -575,94 +619,79 @@ class Dataset(object):
             else:
                 ax[0].errorbar(z[sn], y[sn], yerr = mu_errs[sn], fmt = 'o', alpha = 0.3, markersize = 9, color = 'k', capsize=5)
         
-            
-        ax[0].axhline(y=offset, ls='--', c='b')#np.sort(z), np.ones(len(z))*offset,
+        offset = np.average(y, weights = 1 / mu_errs ** 2) # subtract out mean value
+        ax[0].axhline(y = offset, ls = '--', c = 'b')
 
         gold_avg, gold_err = avg_and_error(y[self.gold], mu_errs[self.gold])
         nd_avg, nd_err = avg_and_error(y[self.gold_nd], mu_errs[self.gold_nd])
         excess_avg, excess_err = avg_and_error(y[self.excess], mu_errs[self.excess])
         noexcess_avg, noexcess_err = avg_and_error(y[self.nd], mu_errs[self.nd])
-        
-        #print('Excess Avg. Residual: {}'.format(excess_avg))
-        #print('Error: {}'.format(excess_err))
-        #print('No Excess Avg. Residual: {}'.format(noexcess_avg))
-        #print('Error: {}'.format(noexcess_err))
-        #print('Pop. Avg. Residual: {}'.format(np.average(y, weights = 1/mu_errs**2)))
-        #print('Error: {}'.format(np.sqrt(1/np.sum(1/mu_errs[no_excess]**2))))
 
+        # Plot side histograms
         ax[1].hist(y[self.excess], alpha = 0.3, color = 'r', label = 'All Excess', orientation = 'horizontal')
         hist = ax[1].hist(y[self.nd], alpha = 0.3,color = 'k', label = 'All No Excess', orientation = 'horizontal')
-        ax[1].axhline(y = excess_avg, ls = '--', c = 'r')
         x = np.arange(0, np.max(hist[0] + 2))
         ax[1].fill_between(x, y1 = excess_avg - excess_err, y2 = excess_avg + excess_err, color = 'r', alpha = 0.3)
         ax[1].fill_between(x, y1 = noexcess_avg - noexcess_err, y2 = noexcess_avg + noexcess_err, color = 'k', alpha = 0.3)
+        ax[1].axhline(y = excess_avg, ls = '--', c = 'r')
         ax[1].axhline(y = noexcess_avg, ls = '--', c = 'k')
         ax[1].legend()
         ax[1].set(xlim = (0, np.max(hist[0] + 1)))
         ax[1].set_xticks([])
 
+        # Plot formatting and text
         pos = {'yao': 0.015, 'burke': 0.015, 'ztf': 0.01}
         heights = {'yao': [0.4, 0.6], 'burke': [0.4, 0.6], 'ztf': [-0.7, -0.45]}
         ylims = {'yao': [-0.5, 0.68], 'burke': [-0.5, 0.68], 'ztf': [-0.75, 0.8]}
+        titles = {'yao': 'Yao et al. 2019', 'ztf': 'Dhawan et al. 2022', "burke": 'Burke et al. 2022b'}
 
         align = 'left'
         text_pos = pos[self.name]
         text_heights = np.linspace(heights[self.name][0], heights[self.name][1], 4)
         ax[0].set_ylim(ylims[self.name][0], ylims[self.name][1])
-
-        ax[0].text(text_pos, text_heights[1], 'All Excess: ${:.3f} \pm {:.3f}$'.format(excess_avg, excess_err), horizontalalignment=align,)
-        ax[0].text(text_pos, text_heights[2], 'All No Excess: ${:.3f} \pm {:.3f}$'.format(noexcess_avg, noexcess_err), horizontalalignment=align,)
-        ax[0].text(text_pos, text_heights[0], 'Gold Excess: ${:.3f} \pm {:.3f}$'.format(gold_avg, gold_err), horizontalalignment=align,)
-        ax[0].text(text_pos, text_heights[3], 'Gold No Excess: ${:.3f} \pm {:.3f}$'.format(nd_avg, nd_err), horizontalalignment=align,)
-        plt.legend()
-        print(np.std(y))
-
-        titles = {'yao': 'Yao et al. 2019', 'ztf': 'Dhawan et al. 2022', "burke": 'Burke et al. 2022b'}
-        fig.suptitle(titles[self.name])
-
+        ax[0].text(text_pos, text_heights[1], 'All Excess: ${:.3f} \pm {:.3f}$'.format(excess_avg, excess_err), horizontalalignment = align,)
+        ax[0].text(text_pos, text_heights[2], 'All No Excess: ${:.3f} \pm {:.3f}$'.format(noexcess_avg, noexcess_err), horizontalalignment = align,)
+        ax[0].text(text_pos, text_heights[0], 'Gold Excess: ${:.3f} \pm {:.3f}$'.format(gold_avg, gold_err), horizontalalignment = align,)
+        ax[0].text(text_pos, text_heights[3], 'Gold No Excess: ${:.3f} \pm {:.3f}$'.format(nd_avg, nd_err), horizontalalignment = align,)
         ax[0].set_ylabel('$\mu_{SALT3} - \mu_{\Lambda_{CDM}}$ (mag)')
         ax[0].set_xlabel('z')
+        plt.legend()
+        print('Overall scatter: ', np.std(y))
+        
+        if self.name in titles.keys():
+            fig.suptitle(titles[self.name])
         
         if save_fig is not None:
             plt.savefig(+ './{}_hubble.pdf'.format(self.name), bbox_inches = 'tight', pad_inches = 0)
 
-    def load_tiers(self):
-        burke_gold = ['ZTF18aaxsioa', 'ZTF18abcflnz', 'ZTF18abssuxz', 
-          'ZTF18abxxssh', 'ZTF18aavrwhu', 'ZTF18abfhryc',]
-        burke_bronze = ['ZTF18aawjywv', 'ZTF18aaqcozd', 'ZTF18abdfazk',
-         'ZTF18abimsyv', 'ZTF18aazsabq']
-        also_in_literature = ['ZTF18aapqwyv', 'ZTF18aaqqoqs', 'ZTF18aayjvve', 'ZTF18abckujq', 'ZTF18abcrxoj',
-                     'ZTF18abdfazk', 'ZTF18abdfwur', 'ZTF18abfhryc', 'ZTF18abgxvra', 'ZTF18abpamut',]
-        
-        if self.name == "burke":
-            self.gold = burke_gold
-            self.bronze = burke_bronze
-            
-        self.excess = self.bronze + self.gold
-        self.nd = [sn for sn in self.sn_names if sn not in self.excess]
-        self.gold_nd = [sn for sn in self.gold_nd if (sn not in burke_gold and sn not in burke_bronze and sn not in also_in_literature)]
-
     def set_N(self, sn, N):
+        """ Set the best cut date for a given supernova.
+        
+        Parameters:
+        -----------
+        sn: str, supernova name
+        N: int, best cut date for the supernova"""
+        
         self.N.loc[sn] = N
 
 
-    def compare_mass(self):
+    def compare_mass(self, save_fig = None):
+        """ Compare host galaxy masses between excess and non-excess supernovae.
+        
+        Parameters:
+        -----------
+        save_fig: str, optional (default = None), path to directory to save resulting figure"""
+
+        # Compute statistics
+        gold_avg, gold_err = avg_and_error(self.masses.loc[self.gold])
+        nd_avg, nd_err = avg_and_error(self.masses.loc[self.gold_nd])
+        excess_avg, excess_err = avg_and_error(self.masses.loc[self.excess])
+        noexcess_avg, noexcess_err = avg_and_error(self.masses.loc[self.nd])
+
+        # Plot histograms
         cn = ["#68affc", "#304866"][0]
         ce = ["#68affc", "#304866"][1]
-
-        fig, ax = plt.subplots(1, 1, figsize=(8,4))
-        std = np.std(self.masses)[0]
-
-        gold_avg, gold_err = mass_statistics(self.gold, self.masses)
-        nd_avg, nd_err = mass_statistics(self.gold_nd, self.masses)
-        excess_avg, excess_err = mass_statistics(self.excess, self.masses)
-        noexcess_avg, noexcess_err = mass_statistics(self.nd, self.masses)
-        
-        print('No Excess Avg. Mass: {}'.format(excess_avg))
-        print('Error: {}'.format(excess_err))
-        print('No Excess Avg. Mass: {}'.format(noexcess_avg))
-        print('Error: {}'.format(noexcess_err))
-
+        plt.subplots(1, 1, figsize=(8,4))
         hist = plt.hist(self.masses.loc[self.nd], edgecolor = cn, alpha = 0.5, color = cn, label = 'All No Excess', bins = 10)
         plt.hist(self.masses.loc[self.excess], bins = hist[1], edgecolor = ce, alpha=0.5, color = ce, label = 'All Excess')
         plt.legend()
@@ -671,12 +700,9 @@ class Dataset(object):
         ranges = {'yao': [11, 15], 'burke': [11, 15], 'ztf': [22, 43]}
         titles = {'yao': 'Yao et al. 2019', 'ztf': 'Dhawan et al. 2022', "burke": 'Burke et al. 2022b'}
 
+        # Figure labels and titles
         center = center[self.name]
         positions = np.linspace(ranges[self.name][0], ranges[self.name][1], 4)
-
-        # burke/yao: 8.9, 8, 10
-        # ztf: 8, 12, 20
-
         plt.text(center, positions[0], 'Gold No Excess: ${:.2f} \pm {:.2f}$'.format(nd_avg, nd_err), horizontalalignment='left',)
         plt.text(center, positions[1], 'No Excess: ${:.2f} \pm {:.2f}$'.format(noexcess_avg, noexcess_err), horizontalalignment='left',)
         plt.text(center, positions[2], 'All Excess: ${:.2f} \pm {:.2f}$'.format(excess_avg, excess_err), horizontalalignment='left',)
@@ -688,9 +714,12 @@ class Dataset(object):
         plt.legend()
         plt.xlabel('Host Galaxy Mass ($\log_{10} M_{*} / M_\odot$)')
         plt.yticks([])
-        plt.suptitle(titles[self.name])
+        
+        if self.name in titles.keys():
+            plt.suptitle(titles[self.name])
 
-        plt.savefig('./{}_mass.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+        if save_fig is not None:
+            plt.savefig(save_fig + './{}_mass.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
             
     def compute_bump_properties(self):
         """ Compute properties of the bump in the light curve.
@@ -701,16 +730,32 @@ class Dataset(object):
         bands: list (string) of band names
         """
 
-        gauss_params = self.gauss_params.loc[self.excess]
+        # Update computation of bump properties if necessary
+        for sn in self.excess:
+            data = self.data.loc[sn]
+            data = data[data['flux'] / data['flux_err'] > -2] # remove large negative outliers
+            params = self.hubble.loc[sn]
 
-        # CHANGE THIS BACK TO-DO
-        bump_r = flux_from_amp(gauss_params["mu"], gauss_params["sigma"], gauss_params["C_r"])
-        bump_g = flux_from_amp(gauss_params["mu"], gauss_params["sigma"], gauss_params["C_g"])
+            fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_fig = False, verbose = False)
+            result, early_data = fit.fit_model(cut = self.N.loc[sn, 'N'], model = 'gauss')
+            J = result.jac
+            cov = np.linalg.inv(J.T.dot(J))
+            var = np.sqrt(np.diagonal(cov))
+
+            self.gauss_params.loc[sn, ['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'mu', 'sigma', 'C_r', 'C_g', 'B_r', 'B_g',
+                                                                   'dt_exp', 'dA_r', 'dA_g', 'dalpha_r', 'dalpha_g', 'dmu', 'dsigma', 'dC_r', 'dC_g', 'dB_r', 'dB_g']] = list(result.x) + list(var)
+            bics, outliers = fit.bic(sn, models = ['gauss', 'powerlaw'], cut = self.N.loc[sn, 'N'])
+            self.gauss_params['BIC'] = bics[1] - bics[0]
+
+        # Compute flux ratios and colors
+        gauss_params = self.gauss_params.loc[self.excess]
+        bump_r = gauss_params.apply(flux_from_amp, axis = 1, args = ("mu", "sigma", "C_r"))
+        bump_g = gauss_params.apply(flux_from_amp, axis = 1, args = ("mu", "sigma", "C_g"))
         err_r = gauss_params["C_r"] / gauss_params["dC_r"] 
         err_g = gauss_params["C_g"] / gauss_params["dC_g"]
 
         gauss_params["color"] = -2.5 * np.log10(bump_g / bump_r)
-        dgr = np.sqrt((err_r / bump_r) ** 2 + (err_g / bump_g) ** 2)
+        dgr = ((err_r / bump_r) ** 2 + (err_g / bump_g) ** 2).pow(1./2.)
         gauss_params["dcolor"] = -2.5 * 0.434 * dgr / gauss_params["color"]    
         
         ten_r = gauss_params["A_r"] * 10 ** gauss_params["alpha_r"] + gauss_params["B_r"]
@@ -721,85 +766,111 @@ class Dataset(object):
         gauss_params["fg"] = bump_g / ten_g
         gauss_params["dfg"] = (gauss_params["dC_g"] / gauss_params["C_g"]) * gauss_params["fg"]
 
+        # Update object-level gauss_params
         self.gauss_params = gauss_params
 
-    def analyze_bump_shapes(self):
-        gauss_params = self.gauss_params.loc[self.gold]
+    def analyze_bump_shapes(self, save_fig = None, add_uncertainty = False):
+        """
+        Analyze and plot bump shapes for all gold supernovae.
 
+        Parameters:
+        -----------
+        save_fig: str, path to directory to save figure (default = None)
+        add_uncertainty: bool, optional. If True, sample random curves from distribution.
+        """
         fig, ax = plt.subplots(2,1, figsize=(6,5))
         
-        for sn in gauss_params.index.unique():
-            row = gauss_params.loc[sn]
+        for sn in self.gold:
+            row = self.gauss_params.loc[sn]
             x = np.linspace(-3, 6, 200)
             
+            # Sample 10 curves from the Gaussian distribution
             for i in range(10):
-                mu = row['mu'] #+ np.random.normal(0, 1) * row['dmu']
-                sigma = row['sigma'] #+ np.random.normal(0, 1) * row['dsigma']
+                mu = row['mu']
+                sigma = row['sigma']
+                
+                if add_uncertainty:
+                    mu += np.random.normal(0, 1) * row['dmu']
+                    sigma += np.random.normal(0, 1) * row['dsigma']
                 y = stats.norm.pdf(x, loc = mu, scale = sigma)
             
                 y_g = y * row['fg'] / stats.norm.pdf(mu, loc = mu, scale = sigma,)
                 ax[0].plot(x, y_g, c = 'g', alpha = 0.1, )
-                
-                
                 y_r = y * row['fr'] / stats.norm.pdf(mu, loc = mu, scale = sigma,)
                 ax[1].plot(x, y_r, c = 'r', alpha = 0.1,)
         
+        # Plot curves
         ax[0].plot(x, y_g, c = 'g', alpha=1,  label = 'g')
-        ax[1].plot(x, y_r, c = 'r', alpha=1,  label='r')
-            
+        ax[1].plot(x, y_r, c = 'r', alpha=1,  label = 'r')
         ax[0].legend()
         ax[1].legend()
         
         fig.supylabel('$f_{bump}$ / $f_{10}$')
         ax[1].set_xlabel('JD since First Light')
             
-        mu_avg, mu_err = avg_and_error(gauss_params['mu'], gauss_params['dmu'])
-        print(mu_avg, mu_err)
+        mu_avg, mu_err = avg_and_error(self.gauss_params['mu'], self.gauss_params['dmu'])
+        print(r'$\mu$', mu_avg, mu_err)
         ax[0].axvspan(mu_avg - mu_err, mu_avg + mu_err, color='k', alpha=0.3)
         ax[1].axvspan(mu_avg - mu_err, mu_avg + mu_err, color='k', alpha=0.3)
 
-        sig_avg, sig_err = avg_and_error(gauss_params['sigma'], gauss_params['dsigma'])
-        print(sig_avg, sig_err)
+        sig_avg, sig_err = avg_and_error(self.gauss_params['sigma'], self.gauss_params['dsigma'])
+        print(r'$\sigma$', sig_avg, sig_err)
 
-        plt.savefig('./{}_curves.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+        if save_fig:
+            plt.savefig(save_fig + './{}_curves.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
 
-    def analyze_bump_amps(self):
-        fig, ax = plt.subplots(figsize=(6,5))
+    def analyze_bump_amps(self, c1 = 'r', c2 = 'g', save_fig = None):
+        """
+        Analyze and plot bump amplitudes in two bands.
+
+        Parameters:
+        -----------
+        c1: str, band 1 (default = 'r')
+        c2: str, band 2 (default = 'g')
+        save_fig: str, path to directory to save figure (default = None)
+        """
+        
+        plt.subplots(figsize=(6,5))
         gauss_params = self.gauss_params.loc[self.gold]
 
-        # TODO: adapt to multiple band sizes (?) 
-        r_avg, r_err = avg_and_error(gauss_params['fr'], gauss_params['dfr'])
-        print('r:', r_avg, r_err)
-        g_avg, g_err = avg_and_error(gauss_params['fg'], gauss_params['dfg'])
-        print('g:', g_avg, g_err)
+        # Compute bump colors and properties
+        r_avg, r_err = avg_and_error(gauss_params['f{}'.format(c1)], gauss_params['df{}'.format(c2)])
+        print(c1, ':', r_avg, r_err)
+        g_avg, g_err = avg_and_error(gauss_params['f{}'.format(c2)], gauss_params['df{}'.format(c2)])
+        print(c2, ':', g_avg, g_err)
 
         diff = g_avg - r_avg
         d_err = np.sqrt(r_err**2 + g_err**2)
-
-        print('$fg - fr = {} \pm {}$'.format(diff, d_err))
+        print('$f{} - f{} = {} \pm {}$'.format(c1, c2, diff, d_err))
 
         color_avg, color_err = avg_and_error(gauss_params['color'], gauss_params['dcolor'])
         print('$\log_{{10}}(G - R) = {} \pm {}$'.format(color_avg, color_err))
 
-        plt.errorbar(gauss_params['fr'], gauss_params['fg'], yerr = gauss_params['dfg'], 
-                    xerr = gauss_params['dfr'], fmt = 'o', c = 'k', markersize = 5, alpha = 0.8)
-        
-        plt.axhspan(g_avg - g_err, g_avg + g_err, alpha = 0.5, color = 'g')
-        plt.axvspan(r_avg - r_err, r_avg + r_err, hatch = 'X',facecolor = 'r', edgecolor = 'k', alpha = 0.5)
-
-        #plt.plot(x,x,'--', c='b')
+        # Plot bump amplitudes between bands
+        plt.errorbar(gauss_params['f{}'.format(c1)], gauss_params['f{}'.format(c2)], yerr = gauss_params['df{}'.format(c2)], 
+                    xerr = gauss_params['df{}'.format(c1)], fmt = 'o', c = 'k', markersize = 5, alpha = 0.8)
+        plt.axhspan(g_avg - g_err, g_avg + g_err, alpha = 0.5, color = c2)
+        plt.axvspan(r_avg - r_err, r_avg + r_err, hatch = 'X',facecolor = c1, edgecolor = 'k', alpha = 0.5)
         plt.xlim(-0.01, 0.24)
         plt.ylim(-0.01, 0.24)
-        plt.xlabel('$f_{bump,r}$ / $f_{10,r}$')
-        plt.ylabel('$f_{bump,g}$ / $f_{10,g}$')
+        plt.xlabel('$f_{bump,{}}$ / $f_{10,{}}$'.format(c1, c1))
+        plt.ylabel('$f_{bump,{}}$ / $f_{10,{}}$'.format(c2, c2))
 
-        plt.savefig('./{}_bumps.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+        if save_fig is not None:
+            plt.savefig(save_fig + './{}_bumps.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
 
-    def analyze_PL(self):
-        pl_params = self.pl_params.loc[self.gold]
-        
-        fig, ax = plt.subplots(figsize=(6,5))
+    def analyze_PL(self, save_fig = None):
+        """
+        Analyze and plot power-law slopes for all gold supernovae.
 
+        Parameters:
+        -----------
+        save_fig: str, path to directory to save figure (default = None)
+        """
+        pl_params = self.pl_params.loc[self.gold].dropna()
+        plt.subplots(figsize=(6,5))
+
+        # Compute power law slopes by color
         err_weights = 1 / pl_params['dalpha_r'] ** 2
         r_avg = np.average(pl_params['alpha_r'], weights = err_weights)
         r_err = np.sqrt(1 / np.sum(err_weights))
@@ -812,41 +883,48 @@ class Dataset(object):
 
         diff = g_avg - r_avg
         d_err = np.sqrt(r_err**2 + g_err**2)
+        print(r'$\alpha_g - \alpha_r = {} \pm {}$'.format(diff, d_err))
 
-        print('$\alpha_g - \alpha_r = {} \pm {}$'.format(diff, d_err))
-
+        # Plot power law slopes
         plt.errorbar(pl_params['alpha_r'], pl_params['alpha_g'], yerr = pl_params['dalpha_g'], 
                     xerr = pl_params['dalpha_r'], fmt = 'o', c = 'k', markersize = 5)
        
         x = np.linspace(1.1, 2.75)
-        plt.axhspan(g_avg - g_err, g_avg + g_err, alpha = 0.5, color = 'g', label = '$\overline{\alpha}_g$ $(1\sigma)$')
-        plt.axvspan(r_avg - r_err, r_avg + r_err, alpha = 0.5, hatch = 'X',facecolor = 'r', edgecolor = 'k', label = '$\overline{\alpha}_r$ $(1\sigma)$')
+        plt.axhspan(g_avg - g_err, g_avg + g_err, alpha = 0.5, color = 'g', label = r'$\overline{\alpha}_g$ $(1\sigma)$')
+        plt.axvspan(r_avg - r_err, r_avg + r_err, alpha = 0.5, hatch = 'X',facecolor = 'r', edgecolor = 'k', label = r'$\overline{\alpha}_r$ $(1\sigma)$')
 
-        plt.plot(x,x,'--', c='k', alpha=0.5, label='$\alpha_g = \alpha_r$')
+        plt.plot(x,x,'--', c='k', alpha=0.5, label=r'$\alpha_g = \alpha_r$')
         plt.legend()
-        plt.xlabel('$\alpha_r $')
-        plt.ylabel('$\alpha_g $')
+        plt.xlabel(r'$\alpha_r$')
+        plt.ylabel(r'$\alpha_g$')
 
-        plt.savefig('./{}_slopes.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+        if save_fig is not None:
+            plt.savefig(save_fig + './{}_slopes.pdf'.format(self.name), bbox_inches = 'tight', pad_inches=0)
     
     def compare_fit_params(self, params = ['x1', 'c']):
+        """Compare SALT3 parameters between SN with and without excess.
+        
+        Parameters:
+        -----------
+        params: list (str) of parameters to compare (default = ['x1', 'c'])"""
+        
         for param in params:
-            err_weights = 1 / self.hubble[self.gold, "d{}".format(param)] ** 2
-            gold_avg = np.average(self.hubble[self.gold, param], weights = err_weights)
-            gold_err = np.sqrt(1 / np.sum(err_weights))
+            gold_avg, gold_err = avg_and_error(self.hubble.loc[self.gold, param], self.hubble.loc[self.gold, "d{}".format(param)])
             print('Gold {}: '.format(param), gold_avg, gold_err)
 
-            err_weights = 1 / self.hubble[self.excess, "d{}".format(param)] ** 2
-            excess_avg = np.average(self.hubble[self.excess, param], weights = err_weights)
-            excess_err = np.sqrt(1 / np.sum(1 / err_weights))
-            print('Excess $x_1$: ', excess_avg, excess_err)
+            excess_avg, excess_err = avg_and_error(self.hubble.loc[self.excess, param], self.hubble.loc[self.excess, "d{}".format(param)])
+            print('Excess {}: '.format(param), excess_avg, excess_err)
 
-            err_weights = 1 / self.hubble[self.nd, "d{}".format(param)] ** 2
-            noexcess_avg = np.average(self.hubble[self.nd, param], weights = err_weights)
-            noexcess_err = np.sqrt(1 / np.sum(1 / err_weights))
-            print('No Excess $x_1$: ', noexcess_avg, noexcess_err)
+            noexcess_avg, noexcess_err = avg_and_error(self.hubble.loc[self.nd, param], self.hubble.loc[self.nd, "d{}".format(param)])
+            print('No Excess {}: '.format(param), noexcess_avg, noexcess_err)
     
     def load_from_saved(self, save_path):
+        """Load computed parameters from a saved directory.
+        
+        Parameters:
+        -----------
+        save_path: str, path to directory containing saved parameters"""
+
         self.hubble = pd.read_csv(save_path + '{}_hubble.csv', index_col='SN')
         print('Loaded Hubble diagram parameters')
         
@@ -868,20 +946,42 @@ class Dataset(object):
         
 
     def make_paper_table(self):
-        print("Not yet implemented")
+        """Create a LaTeX table of fit parameters, as seen in the paper."""
 
-    def end_to_end(self, verbose, save_path):
+        for sn in self.excess:
+            row = self.gauss_params.loc[sn]
+            mb = -2.5 * np.log10(row['x0']) + 10.635
+            dmb = 2.5 * 0.434 * row['dx0'] / row['x0']
+            # name, z, t_exp, M_B, x_1, c, BIC, bump_r, bump_g, N
+            print('{} & {} & {} & {} & {} & {} & {} & {} & {} & {} \\\\'.format(sn.split('18')[1], 
+                                                                                np.round(row['z'], 3), 
+                                                                                np.round(row['t0'] - 2400000.5, 1),
+                                                                                table_errs(mb, dmb), 
+                                                                                table_errs(row['x1'], row['dx1']),
+                                                                                table_errs(row['c'], row['dc']), 
+                                                                                row['BIC'], 
+                                                                                table_errs(row['fr'], row['dfr']),
+                                                                                table_errs(row['fg'], row['dfg']),
+                                                                                self.N.loc[sn, 'N']))
+
+    def end_to_end(self, verbose = False, save_path = None):
+        """Compute Hubble fit and excess search, end to end.
+        
+        Parameters:
+        -----------
+        verbose: bool; if True, print out progress and fit results
+        save_path: str, optional; path to directory to save Hubble parameters and figures. If None, parameters will not be saved outside the instance"""
+
         # Processing steps
-        self.fit_salt(verbose, save_path)
+        self.fit_salt(verbose = verbose, save_path = save_path)
         self.salt_stats()
-        self.spectral_filter()
+        self.spectral_filter(verbose = verbose)
         self.pv_correction()
-        self.param_cuts()
-        self.fit_hubble() # includes Tripp fitting step
+        self.param_cuts(verbose = verbose)
+        self.fit_hubble(save_path = save_path, verbose = verbose) # includes Tripp fitting step
 
         # Light curve fitting
-        self.excess_search()
-        self.load_tiers()
+        self.excess_search(save_path = save_path, verbose = verbose)
 
         # Analysis steps
         self.compare_excess()
