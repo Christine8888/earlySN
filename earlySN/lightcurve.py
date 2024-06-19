@@ -9,17 +9,21 @@ from astropy.cosmology import Planck18 as cosmo
 import scipy.optimize as opt 
 from scipy import stats 
 
-# TODO: implement double power law
-
 def weighted_average(data):
+    """ Compute weighted average of SN lightcurve data points.
+    
+    Parameters:
+    -----------
+    data: [N x 3] array of SN lightcurve data, where N is the number of data points; 0: MJD, 1: flux, 2: flux error"""
+
     # Set MJD range
-    jdmin = np.min(data[:,0]) - 0.2
-    jdmax = np.max(data[:,0]) + 0.2
+    jdmin = np.min(data[:, 0]) - 0.2
+    jdmax = np.max(data[:, 0]) + 0.2
     
     # Bin data by date
     hist, bins = np.histogram(data, bins = np.arange(jdmin, jdmax, 1))
     w_av = np.zeros((bins.shape[0], 3))
-    bin_indices = np.digitize(data[:,0], bins = bins)
+    bin_indices = np.digitize(data[:, 0], bins = bins)
     
     # Calculate weighted average by bin
     for i in np.unique(bin_indices):
@@ -29,7 +33,7 @@ def weighted_average(data):
         
         w_av[j, 0] = np.mean(points[:,0])
         w_av[j, 1] = np.average(points[:,1], weights = inv_variances)
-        w_av[j,2] = np.sqrt(1 / (np.sum(inv_variances)))
+        w_av[j, 2] = np.sqrt(1 / (np.sum(inv_variances)))
     
     return w_av[~np.all(w_av == 0, axis=1)]
 
@@ -37,13 +41,13 @@ def weighted_average(data):
 def pl_rise_model(x, t_rise, amp, power, offset):
     """ Model for a single power-law lightcurve rise.
         
-        Parameters:
-        ----------- 
-        x: array of input positions (floats, representing times of observation)
-        t_rise: float, time of first explosion light; before t_rise, model returns offset + 0
-        amp: float, scaling factor on light curve
-        offset: float, offset factor on light curve
-        ----------- 
+    Parameters:
+    ----------- 
+    x: array of input positions (floats, representing times of observation)
+    t_rise: float, time of first explosion light; before t_rise, model returns offset + 0
+    amp: float, scaling factor on light curve
+    offset: float, offset factor on light curve
+    ----------- 
     """
     vals = np.zeros(x.shape[0]) + offset
     vals[x >= t_rise] += amp *  (x[x >= t_rise] - t_rise) ** power
@@ -54,11 +58,11 @@ def pl_rise_model(x, t_rise, amp, power, offset):
 def pl_model(params, data, bands):
     """ Calculates error between observed data and power-law model predictions.
     
-        Parameters:
-        ----------- 
-        params: array of dictionaries containing parameters (by band) for power-law model
-        data: dictionary of time [:, 0] and flux [:, 1] data, by band
-        bands: array of bands
+    Parameters:
+    ----------- 
+    params: array of dictionaries containing parameters (by band) for power-law model
+    data: dictionary of time [:, 0] and flux [:, 1] data, by band
+    bands: array of bands
     """
     
     # Initialize all parameters
@@ -90,18 +94,18 @@ def pl_model(params, data, bands):
 def gauss_rise_model(x, t_rise, pl_amp, power, mu, sigma, gauss_amp, offset):
     """ Model for a single power-law + Gaussian component lightcurve rise.
         
-        Parameters:
-        ----------- 
-        x: array of input positions (floats, representing dates of observation)
-        t_rise: float (day), time of first power-law light
-        pl_amp: float, scaling factor on power-law component
-        mu: float, center (day) of Gaussian component
-        sigma: float, standard deviation (days) of Gaussian component
-        gauss_amp: float, scaling factor on Gaussian component
-        offset: float, overall offset factor on light curve
+    Parameters:
+    ----------- 
+    x: array of input positions (floats, representing dates of observation)
+    t_rise: float (day), time of first power-law light
+    pl_amp: float, scaling factor on power-law component
+    mu: float, center (day) of Gaussian component
+    sigma: float, standard deviation (days) of Gaussian component
+    gauss_amp: float, scaling factor on Gaussian component
+    offset: float, overall offset factor on light curve
     """
     vals = np.zeros(x.shape[0]) + offset
-    vals[x>= t_rise] += pl_amp * (x[x >= t_rise] - t_rise)**power
+    vals[x>= t_rise] += pl_amp * (x[x >= t_rise] - t_rise) ** power
     vals += gauss_amp * stats.norm.pdf(x, loc = mu, scale = sigma)
     
     return vals
@@ -109,11 +113,11 @@ def gauss_rise_model(x, t_rise, pl_amp, power, mu, sigma, gauss_amp, offset):
 def gauss_model(params, data, bands):
     """ Calculates error between observed data and Gaussian + power-law model predictions.
     
-        Parameters:
-        ----------- 
-        params: array of dictionaries containing parameters (by band) for power-law model
-        data: dictionary of time [:, 0] and flux [:, 1] data, by band
-        bands: array of bands
+    Parameters:
+    ----------- 
+    params: array of dictionaries containing parameters (by band) for power-law model
+    data: dictionary of time [:, 0] and flux [:, 1] data, by band
+    bands: array of bands
     """
     t_rise = params[0]
     amps = {'r': params[1], 'g': params[2]}
@@ -160,12 +164,12 @@ def identify_excess(diff, error, sigma = 3):
 def compute_bump_errs(result, bands, verbose = False):
     """ Utility function to compute excess flux value & uncertainty from Gaussian component.
         
-        Parameters:
-        ----------- 
-        result: object output from scipy.minimize (created by self.fit_model)
-        bands: list (string) of band names
-        verbose: boolean; if verbose, will print out values
-        ----------- 
+    Parameters:
+    ----------- 
+    result: object output from scipy.minimize (created by self.fit_model)
+    bands: list (string) of band names
+    verbose: boolean; if verbose, will print out values
+    ----------- 
     """
 
     n = len(bands)
@@ -191,17 +195,17 @@ def compute_bump_errs(result, bands, verbose = False):
 def tier(type, cuts, deltas, outliers, result, early_data, bands, best_cut, verbose):
     """ Determine whether or not the light-curve meets criteria for different tiers of early excess.
         
-        Parameters:
-        ----------- 
-        type: string ("gold" or "bronze"), determines stringency of criteria
-        cuts: length-N list, cut range values
-        deltas: length-N list, BIC differences for each value in the cut range
-        outliers: (N x 2) array, number of outlying points (by band) for each cut value
-        result: output object from scipy.minimize (created by self.fit_model)
-        early_data: lightcurve data, cut to specific dates
-        bands: list (string) of band names
-        verbose: boolean; if verbose, will print out values
-        ----------- 
+    Parameters:
+    ----------- 
+    type: string ("gold" or "bronze"), determines stringency of criteria
+    cuts: length-N list, cut range values
+    deltas: length-N list, BIC differences for each value in the cut range
+    outliers: (N x 2) array, number of outlying points (by band) for each cut value
+    result: output object from scipy.minimize (created by self.fit_model)
+    early_data: lightcurve data, cut to specific dates
+    bands: list (string) of band names
+    verbose: boolean; if verbose, will print out values
+    ----------- 
     """
 
     returns = {}
@@ -305,16 +309,16 @@ def flux_from_amp(mu, sigma, amp):
 def nd(cuts, deltas, outliers, result, early_data, bands, best_cut, verbose):
     """ Determine whether or not the light-curve meets criteria for gold-tier control/non-detection of excess.
         
-        Parameters:
-        ----------- 
-        cuts: length-N list, cut range values
-        deltas: length-N list, BIC differences for each value in the cut range
-        outliers: (N x 2) array, number of outlying points (by band) for each cut value
-        result: output object from scipy.minimize (created by self.fit_model)
-        early_data: lightcurve data, cut to specific dates
-        bands: list (string) of band names
-        verbose: boolean; if verbose, will print out values
-        ----------- 
+    Parameters:
+    ----------- 
+    cuts: length-N list, cut range values
+    deltas: length-N list, BIC differences for each value in the cut range
+    outliers: (N x 2) array, number of outlying points (by band) for each cut value
+    result: output object from scipy.minimize (created by self.fit_model)
+    early_data: lightcurve data, cut to specific dates
+    bands: list (string) of band names
+    verbose: boolean; if verbose, will print out values
+    ----------- 
     """
 
     # Bump size criterion
@@ -439,13 +443,16 @@ class Lightcurve(object):
         
         for band in self.bands:
             pre_cut = early_data[band][:,0] < self.params['t0'] - cut
-            early_data[band] = self.data_by_band[band][pre_cut]
+            early_data[band] = early_data[band][pre_cut]
+            
+            not_negative = early_data[band][:, 1]/early_data[band][:, 2] > -2
+            early_data[band] = early_data[band][not_negative]
 
             if early_data[band].shape[0] >= 2: # if there are at least 2 data points in the band
                 # Guess quadratic amplitude
                 guess_amp[band] = (max(early_data[band][:,1]) - min(early_data[band][:,1])) # max flux difference
                 guess_amp[band] /= (max(early_data[band][:,0]) - min(early_data[band][:,0])) ** 2 # max time difference
-                guess_amp[band] = max(guess_amp[band], 500) # set max cutoff
+                guess_amp[band] = min(guess_amp[band], 500) # set max cutoff
             else:
                 guess_amp[band] = 50
 
@@ -468,7 +475,7 @@ class Lightcurve(object):
         # Optimize parameters by model
         if model == 'powerlaw':
             x0 = [self.guess_t0] + [guess_amp[band] for band in self.bands] + [pl_guess] * n + [0] * n
-            lbound = [self.guess_t0 - 10] + [0] * n + [pl_min] * n + [-100] * n
+            lbound = [self.guess_t0 - 20] + [0] * n + [pl_min] * n + [-100] * n
             ubound = [self.guess_t0 + 20] + [500] * n + [pl_max] * n + [100] * n
             
             result = opt.least_squares(pl_model, x0 = x0, bounds = (lbound, ubound), args = args)
@@ -528,7 +535,7 @@ class Lightcurve(object):
             
             bics[i] =  k * np.log(total) - loglike
 
-            early_data, outliers, t_range, binned, (rise_y, binned_y) = self.analyze(model = models[i], early_data = early_data, fit_params = result.x)
+            early_data, outliers, t_range, binned, (rise_y, binned_y) = self.analyze(model = models[i], early_data = early_data, fit_params = result.x, cut = cut)
         
         return bics, [outliers[bands[0]], outliers[bands[1]]]
 
@@ -543,9 +550,8 @@ class Lightcurve(object):
         plot: if True, will plot BIC difference vs. cut
         """
 
-        cuts = np.arange(8, 14)
-        if self.sn_name == 'ZTF18abcflnz' or self.sn_name == 'ZTF18aasdted':
-            cuts = np.arange(8, 14)
+        cuts = np.arange(7, 14)
+
         if self.sn_name == 'ZTF18abssuxz':
             cuts = np.arange(1,10)
         
@@ -569,7 +575,7 @@ class Lightcurve(object):
             
         return cuts, deltas, outliers
 
-    def analyze(self, model, early_data, fit_params):
+    def analyze(self, model, early_data, fit_params, cut):
         """ Analyze fit and count outliers.
         
         Parameters
@@ -604,10 +610,9 @@ class Lightcurve(object):
                     slope = fit_params[1 + n + i]
                     offset = fit_params[1 + n * 2 + i]
 
-                    rise_y[band] = [pl_rise_model(t_range[band], t_rise, amp, slope, offset)]
-                    binned_y[band] = [pl_rise_model(binned[band][:,0], t_rise, amp, slope, offset)]
-
-                    resid_diff = binned[band][:,1] - binned_y[band][0]
+                    rise_y[band] = [pl_rise_model(t_range[band], t_rise, amp, slope, offset)] # model prediction for flux given original data
+                    binned_y[band] = [pl_rise_model(binned[band][:,0], t_rise, amp, slope, offset)] # model prediction for flux given binned data
+                    resid_diff = binned[band][:,1] - binned_y[band][0] # difference between binned data and model prediction
                     outliers[band] = identify_excess(resid_diff, binned[band][:,2])
 
                 elif model == 'gauss':
@@ -626,14 +631,13 @@ class Lightcurve(object):
 
                     binned_y[band] = [gauss_rise_model(binned[band][:,0], t_rise, amp, slope, mu, sigma, gauss_amp, offset),
                                 gauss_rise_model(binned[band][:,0], t_rise, amp, slope, mu, sigma, 0, offset)]
-                    
                     resid_diff = binned_y[band][0] - binned_y[band][1]
                     outliers[band] = identify_excess(resid_diff, binned[band][:,2])
                 
                 else:
                     print('Oops, not yet implemented.')
             
-        if self.verbose: print(outliers) # TO-DO: TURN OFF?  
+        if self.verbose: print(cut, outliers) # TO-DO: TURN OFF?  
         
         return early_data, outliers, t_range, binned, (rise_y, binned_y)
     
@@ -664,7 +668,6 @@ class Lightcurve(object):
                 
                 ax[i,0].plot(t_range[band], rise_y[band][j], label='{} fit'.format(labels[j]),color=band, ls=styles[j])
 
-
             ax[i,0].set_xlabel('JD since First Light')
             ax[i,0].set_ylabel('Flux')
             ax[i,0].legend()
@@ -685,9 +688,9 @@ class Lightcurve(object):
             fig.tight_layout()
             
             if self.save_fig:
-                plt.savefig('{}_rise.pdf'.format(self.sn_name))
+                plt.savefig(self.save_fig + '{}_rise.pdf'.format(self.sn_name))
 
-    def excess_search(self, pl_bounds = None, not_bronze = [], default_cut = 10, best_cut = None):
+    def excess_search(self, pl_bounds = None, not_bronze = [], default_cut = 10, best_cut = None, verbose = False):
         """ Search for an early excess in the light curve.
         
         Parameters
@@ -707,12 +710,14 @@ class Lightcurve(object):
             return None, None, None, None
             
         cuts, deltas, outliers = self.bic_range(['powerlaw', 'gauss'], self.bands, plot = False)
-        reasonable = deltas > -150
+        if self.verbose: print(list(zip(cuts, deltas)))
+        reasonable = deltas > -250
+
         if np.sum(reasonable) < 2:
             if self.verbose: print('Unreasonable.')
             return None, None, None, None      
         
-        # Compute parameters for power law with default cut
+        # Compute parameters for power law with default (early) cut
         result, early_data = self.fit_model(cut = 10, model = 'powerlaw')
         if result is not None:
             try:
@@ -751,15 +756,18 @@ class Lightcurve(object):
             gauss_params = list(result.x) + list(var)
             
             if tier("gold", cuts, deltas, outliers, result, early_data, self.bands, best_cut, self.verbose):
-                early_data, outliers, t_range, binned, y = self.analyze("gauss", early_data, result.x)
+                early_data, outliers, t_range, binned, y = self.analyze("gauss", early_data, result.x, best_cut)
                 self.plot(early_data, t_range, binned, y)
                 sn_tier = "gold"
+                if verbose: print("gold")
             
             elif nd(cuts, deltas, outliers, result, early_data, self.bands, best_cut, self.verbose):
                 sn_tier = "gold_nd"
+                if verbose: print("gold_nd")
             
             elif self.sn_name not in not_bronze and tier("bronze", cuts, deltas, outliers, result, early_data, self.bands, best_cut, self.verbose):
                 sn_tier = "bronze"
+                if verbose: print("bronze")
         
             return pl_params, gauss_params, sn_tier, best_cut
         

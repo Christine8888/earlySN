@@ -18,6 +18,10 @@ from earlySN import lightcurve
 from astropy import units as u
 from astropy.cosmology import Planck18 as cosmo
 
+# OPEN TO-DO LIST
+# Add in more functionality for different bands + custom dataset formats
+# Add ability to change fit parameters & cut
+
 def avg_and_error(data, errs):
     """
     Calculate weighted average and standard error.
@@ -184,8 +188,8 @@ class Dataset(object):
                 self.pecs = pd.read_csv(base_path + '/data/yao_pvs.txt', delimiter = ' ', index_col = 0).rename(columns = {'0': 'v'})
             
             elif default == 'dhawan':
-                self.data = pd.read_csv(base_path + '/data/dhawan_data.csv', index_col = 'SN')
-                self.params = pd.read_csv(base_path + '/data/dhawan_params.csv', index_col = 'SN')
+                self.data = pd.read_csv(base_path + '/data/dhawan_data.csv',)
+                self.params = pd.read_csv(base_path + '/data/dhawan_params.csv')
                 self.masses = pd.read_csv(base_path + '/data/dhawan_masses.csv', index_col = 0).rename(columns={'0': 'mass'})
                 self.pecs = pd.read_csv(base_path + '/data/dhawan_pvs.txt', delimiter = ' ', index_col = 0).rename(columns = {'0': 'v'})
             
@@ -521,17 +525,40 @@ class Dataset(object):
 
         if save_path is not None:
             self.hubble.loc[self.sn_names].to_csv(save_path + '{}_hubble.csv')
+    
+    def fit_single_sn(self, sn, cut = None):
+        """ Helper function to search for early excess in a single supernova.
+        
+        Parameters:
+        -----------
+        sn: str, supernova to fit"""
+
+        data = self.data.loc[sn]
+        data = data[data['flux'] / data['flux_err'] > -2]
+        params = self.hubble.loc[sn]
+        
+        fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_fig = False, verbose = True)
+        if cut is None:
+            pl_params, gauss_params, classification, self.N.loc[sn, 'N'] = fit.excess_search(verbose = True)
+        else:
+            pl_result, early_data = fit.fit_model(cut = cut, model = 'powerlaw')
+            pl_params = pl_result.x
+            gauss_result, early_data = fit.fit_model(cut = cut, model = 'gauss')
+            gauss_params = gauss_result.x
+            early_data, outliers, t_range, binned, y = fit.analyze("gauss", early_data, gauss_result.x, cut)
+            fit.plot(early_data, t_range, binned, y)
 
     def excess_search(self, save_path = None, save_fig = None, verbose = False):
         """ Search for lightcurves with early excess. To be applied after Hubble fitting and parameter cuts
         
         Parameters:
-        -----------
+        ------------
         save_path: str, optional (default = None); path to directory to save lightcurve parameters. If None, parameters will not be saved outside the instance
         save_fig: str, optional (default = None); path to directory to save lightcurve figures.
         verbose: bool (default = False); if True, print progress and parameters
         """
-
+        
+       
         targets = self.sn_names
         self.gauss_params = pd.DataFrame(index = targets, columns=['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'mu', 'sigma', 'C_r', 'C_g', 'B_r', 'B_g',
                                                                    'dt_exp', 'dA_r', 'dA_g', 'dalpha_r', 'dalpha_g', 'dmu', 'dsigma', 'dC_r', 'dC_g', 'dB_r', 'dB_g'])
@@ -554,7 +581,6 @@ class Dataset(object):
             if sn not in not_bronze:
                 data = self.data.loc[sn]
                 data = data[data['flux'] / data['flux_err'] > -2] # remove large negative outliers
-                
                 params = self.hubble.loc[sn]
                 
                 fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_fig = save_fig, verbose = verbose)
@@ -579,21 +605,21 @@ class Dataset(object):
         
         # write files
         if save_path is not None:
-            with open(save_path + '/{}_gold.txt'.format(self.name), 'w') as f:
+            with open(save_path + '{}_gold.txt'.format(self.name), 'w') as f:
                 for line in self.gold:
                     f.write(f"{line}\n")
             
-            with open(save_path + '/{}_gold_nd.txt'.format(self.name), 'w') as f:
+            with open(save_path + '{}_gold_nd.txt'.format(self.name), 'w') as f:
                 for line in self.gold_nd:
                     f.write(f"{line}\n")
 
-            with open(save_path + '/{}_bronze.txt'.format(self.name), 'w') as f:
+            with open(save_path + '{}_bronze.txt'.format(self.name), 'w') as f:
                 for line in self.bronze:
                     f.write(f"{line}\n")
             
             if save_path is not None:
-                self.gauss_params.to_csv(save_path + '{}_gauss_params.csv')
-                self.pl_params.to_csv(save_path + '{}_pl_params.csv')
+                self.gauss_params.to_csv(save_path + '{}_gauss_params.csv'.format(self.name))
+                self.pl_params.to_csv(save_path + '{}_pl_params.csv'.format(self.name))
     
     
     def compare_excess(self, save_fig = None):
@@ -744,7 +770,7 @@ class Dataset(object):
 
             self.gauss_params.loc[sn, ['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'mu', 'sigma', 'C_r', 'C_g', 'B_r', 'B_g',
                                                                    'dt_exp', 'dA_r', 'dA_g', 'dalpha_r', 'dalpha_g', 'dmu', 'dsigma', 'dC_r', 'dC_g', 'dB_r', 'dB_g']] = list(result.x) + list(var)
-            bics, outliers = fit.bic(sn, models = ['gauss', 'powerlaw'], cut = self.N.loc[sn, 'N'])
+            bics, outliers = fit.bic(models = ['gauss', 'powerlaw'], cut = self.N.loc[sn, 'N'])
             self.gauss_params['BIC'] = bics[1] - bics[0]
 
         # Compute flux ratios and colors
@@ -765,9 +791,6 @@ class Dataset(object):
         gauss_params["dfr"] = (gauss_params["dC_r"] / gauss_params["C_r"]) * gauss_params["fr"]
         gauss_params["fg"] = bump_g / ten_g
         gauss_params["dfg"] = (gauss_params["dC_g"] / gauss_params["C_g"]) * gauss_params["fg"]
-
-        # Update object-level gauss_params
-        self.gauss_params = gauss_params
 
     def analyze_bump_shapes(self, save_fig = None, add_uncertainty = False):
         """
@@ -859,26 +882,28 @@ class Dataset(object):
         if save_fig is not None:
             plt.savefig(save_fig + './{}_bumps.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
 
-    def analyze_PL(self, save_fig = None):
+    def analyze_PL(self, save_fig = None, subset = "excess"):
         """
         Analyze and plot power-law slopes for all gold supernovae.
 
         Parameters:
         -----------
         save_fig: str, path to directory to save figure (default = None)
+        subset: str, subset of supernovae to analyze (default = "excess")
         """
-        pl_params = self.pl_params.loc[self.gold].dropna()
+        if subset == "excess":
+            pl_params = self.gauss_params.loc[self.excess].dropna()
+        elif subset == "all":
+            pl_params = self.gauss_params.dropna()
+        
+        pl_params = pl_params[np.logical_and(pl_params['dalpha_r'] < 1, pl_params['dalpha_g'] < 1)]
         plt.subplots(figsize=(6,5))
 
         # Compute power law slopes by color
-        err_weights = 1 / pl_params['dalpha_r'] ** 2
-        r_avg = np.average(pl_params['alpha_r'], weights = err_weights)
-        r_err = np.sqrt(1 / np.sum(err_weights))
+        r_avg, r_err = avg_and_error(pl_params['alpha_r'], pl_params['dalpha_r'])
         print(r_avg, r_err)
 
-        err_weights = 1 / pl_params['dalpha_g'] ** 2
-        g_avg = np.average(pl_params['alpha_g'], weights = err_weights)
-        g_err = np.sqrt(1 / np.sum(err_weights))
+        g_avg, g_err = avg_and_error(pl_params['alpha_g'], pl_params['dalpha_g'])
         print(g_avg, g_err)
 
         diff = g_avg - r_avg
@@ -926,6 +951,7 @@ class Dataset(object):
         save_path: str, path to directory containing saved parameters"""
 
         self.hubble = pd.read_csv(save_path + '{}_hubble.csv', index_col='SN')
+        self.sn_names = self.hubble.index.unique()
         print('Loaded Hubble diagram parameters')
         
         if os.path.exists(save_path + '{}_gold.txt'.format(self.name)):
@@ -941,8 +967,8 @@ class Dataset(object):
 
         if os.path.exists(save_path + '{}_gauss_params.csv'.format(self.name)):
             print('Loaded lightcurve fit parameters')
-            self.gauss_params = pd.read_csv(save_path + '{}_gauss_params.csv', index_col = 0)
-            self.pl_params = pd.read_csv(save_path + '{}_pl_params.csv', index_col = 0)
+            self.gauss_params = pd.read_csv(save_path + '{}_gauss_params.csv'.format(self.name), index_col = 0)
+            self.pl_params = pd.read_csv(save_path + '{}_pl_params.csv'.format(self.name), index_col = 0)
         
 
     def make_paper_table(self):
