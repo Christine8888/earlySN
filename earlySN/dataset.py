@@ -38,6 +38,12 @@ def avg_and_error(data, errs):
 
     return avg, err
 
+def mass_statistics(sn_names, masses):
+    std = np.std(masses.loc[sn_names].dropna())[0]
+    avg = np.average(masses.loc[sn_names].dropna())
+    err = std * np.sqrt(1/masses.loc[sn_names].dropna().shape[0])
+    return avg, err 
+
 def flux_from_amp(row, mu = 'mu', sigma = 'sigma', amp = 'amp'):
     """ Calculate the peak flux of a Gaussian from mu, sigma, and amplitude.
     
@@ -524,7 +530,7 @@ class Dataset(object):
         self.hubble.loc[self.sn_names, 'dmu'] = mu_errs
 
         if save_path is not None:
-            self.hubble.loc[self.sn_names].to_csv(save_path + '{}_hubble.csv')
+            self.hubble.loc[self.sn_names].to_csv(save_path + '{}_hubble.csv'.format(self.name))
     
     def fit_single_sn(self, sn, cut = None):
         """ Helper function to search for early excess in a single supernova.
@@ -709,10 +715,10 @@ class Dataset(object):
         save_fig: str, optional (default = None), path to directory to save resulting figure"""
 
         # Compute statistics
-        gold_avg, gold_err = avg_and_error(self.masses.loc[self.gold])
-        nd_avg, nd_err = avg_and_error(self.masses.loc[self.gold_nd])
-        excess_avg, excess_err = avg_and_error(self.masses.loc[self.excess])
-        noexcess_avg, noexcess_err = avg_and_error(self.masses.loc[self.nd])
+        gold_avg, gold_err = mass_statistics(self.gold, self.masses)
+        nd_avg, nd_err = mass_statistics(self.gold_nd, self.masses)
+        excess_avg, excess_err = mass_statistics(self.excess, self.masses)
+        noexcess_avg, noexcess_err = mass_statistics(self.nd, self.masses)
 
         # Plot histograms
         cn = ["#68affc", "#304866"][0]
@@ -740,6 +746,15 @@ class Dataset(object):
         plt.legend()
         plt.xlabel('Host Galaxy Mass ($\log_{10} M_{*} / M_\odot$)')
         plt.yticks([])
+        
+        # Compute non-Gaussian statistics
+        print('gold: ', 'median', self.masses.loc[self.gold].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.gold])[0])
+        print('all excess: ', 'median', self.masses.loc[self.excess].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.excess])[0])
+        print('all no excess: ', 'median', self.masses.loc[self.nd].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.nd].dropna())[0])
+        print('gold no excess: ', 'median', self.masses.loc[self.gold_nd].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.gold_nd])[0])
+
+        print('Levene :', stats.levene(self.masses.loc[self.excess]['mass'].dropna(), self.masses.loc[self.nd]['mass'].dropna()))
+        print('Bartlett :', stats.bartlett(self.masses.loc[self.excess]['mass'].dropna(), self.masses.loc[self.nd]['mass'].dropna()))
         
         if self.name in titles.keys():
             plt.suptitle(titles[self.name])
@@ -771,7 +786,7 @@ class Dataset(object):
             self.gauss_params.loc[sn, ['t_exp', 'A_r', 'A_g', 'alpha_r', 'alpha_g', 'mu', 'sigma', 'C_r', 'C_g', 'B_r', 'B_g',
                                                                    'dt_exp', 'dA_r', 'dA_g', 'dalpha_r', 'dalpha_g', 'dmu', 'dsigma', 'dC_r', 'dC_g', 'dB_r', 'dB_g']] = list(result.x) + list(var)
             bics, outliers = fit.bic(models = ['gauss', 'powerlaw'], cut = self.N.loc[sn, 'N'])
-            self.gauss_params['BIC'] = bics[1] - bics[0]
+            self.gauss_params.loc[sn, 'BIC'] = bics[1] - bics[0]
 
         # Compute flux ratios and colors
         gauss_params = self.gauss_params.loc[self.excess]
@@ -791,6 +806,9 @@ class Dataset(object):
         gauss_params["dfr"] = (gauss_params["dC_r"] / gauss_params["C_r"]) * gauss_params["fr"]
         gauss_params["fg"] = bump_g / ten_g
         gauss_params["dfg"] = (gauss_params["dC_g"] / gauss_params["C_g"]) * gauss_params["fg"]
+
+        # TO-DO: figure out how not to overwrite everything (lol)
+        self.gauss_params = gauss_params
 
     def analyze_bump_shapes(self, save_fig = None, add_uncertainty = False):
         """
@@ -854,10 +872,10 @@ class Dataset(object):
         """
         
         plt.subplots(figsize=(6,5))
-        gauss_params = self.gauss_params.loc[self.gold]
+        gauss_params = self.gauss_params.loc[self.excess]
 
         # Compute bump colors and properties
-        r_avg, r_err = avg_and_error(gauss_params['f{}'.format(c1)], gauss_params['df{}'.format(c2)])
+        r_avg, r_err = avg_and_error(gauss_params['f{}'.format(c1)], gauss_params['df{}'.format(c1)])
         print(c1, ':', r_avg, r_err)
         g_avg, g_err = avg_and_error(gauss_params['f{}'.format(c2)], gauss_params['df{}'.format(c2)])
         print(c2, ':', g_avg, g_err)
@@ -876,8 +894,8 @@ class Dataset(object):
         plt.axvspan(r_avg - r_err, r_avg + r_err, hatch = 'X',facecolor = c1, edgecolor = 'k', alpha = 0.5)
         plt.xlim(-0.01, 0.24)
         plt.ylim(-0.01, 0.24)
-        plt.xlabel('$f_{bump,{}}$ / $f_{10,{}}$'.format(c1, c1))
-        plt.ylabel('$f_{bump,{}}$ / $f_{10,{}}$'.format(c2, c2))
+        plt.xlabel('$f_{bump,r}$ / $f_{10,r}$')
+        plt.ylabel('$f_{bump,g}$ / $f_{10,g}$')
 
         if save_fig is not None:
             plt.savefig(save_fig + './{}_bumps.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
@@ -926,14 +944,41 @@ class Dataset(object):
         if save_fig is not None:
             plt.savefig(save_fig + './{}_slopes.pdf'.format(self.name), bbox_inches = 'tight', pad_inches=0)
     
-    def compare_fit_params(self, params = ['x1', 'c']):
+    def analyze_width_correlation(self, save_fig = None):
+        """Analyze correlation between bump width and amplitude.
+        
+        Parameters:
+        -----------
+        save_fig: str, path to directory to save figure (default = None)"""
+
+        plt.subplots(figsize=(6, 5))
+        plt.scatter(self.gauss_params['sigma'], self.gauss_params['fr'], marker = 's', c = 'r', label = 'r', alpha = 0.5)
+        plt.scatter(self.gauss_params['sigma'], self.gauss_params['fg'], marker = 's', c = 'g', label = 'g', alpha = 0.5)
+
+        fit_r = np.polyfit(np.array(self.gauss_params['sigma'], dtype = float), np.array(self.gauss_params['fr'], dtype = float), 1)
+        plt.plot(self.gauss_params['sigma'], np.poly1d(fit_r)(self.gauss_params['sigma']), alpha = 0.5, color = 'r')
+        fit_g = np.polyfit(np.array(self.gauss_params['sigma'], dtype = float), np.array(self.gauss_params['fg'], dtype = float), 1)
+        plt.plot(self.gauss_params['sigma'], np.poly1d(fit_g)(self.gauss_params['sigma']), alpha = 0.5, color = 'g')
+
+        plt.xlabel('excess width ' + r'$\sigma$')
+        plt.ylabel(r'$f_{bump} / f_{10}$')
+        
+        print('r', stats.pearsonr(self.gauss_params['sigma'], self.gauss_params['fr']))
+        print('g', stats.pearsonr(self.gauss_params['sigma'], self.gauss_params['fg']))
+
+        if save_fig is not None:
+            plt.savefig(save_fig + './{}_width_correlation.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+
+    def compare_fit_params(self, params = ['x1', 'c'], save_fig = None):
         """Compare SALT3 parameters between SN with and without excess.
         
         Parameters:
         -----------
-        params: list (str) of parameters to compare (default = ['x1', 'c'])"""
+        params: list (str) of parameters to compare (default = ['x1', 'c'])
+        save_fig: str, path to directory to save figure (default = None)"""
         
-        for param in params:
+        fig, ax = plt.subplots(1, len(params), figsize=(len(params) * 5,5))
+        for i, param in enumerate(params):
             gold_avg, gold_err = avg_and_error(self.hubble.loc[self.gold, param], self.hubble.loc[self.gold, "d{}".format(param)])
             print('Gold {}: '.format(param), gold_avg, gold_err)
 
@@ -942,7 +987,18 @@ class Dataset(object):
 
             noexcess_avg, noexcess_err = avg_and_error(self.hubble.loc[self.nd, param], self.hubble.loc[self.nd, "d{}".format(param)])
             print('No Excess {}: '.format(param), noexcess_avg, noexcess_err)
-    
+
+            colors = ["#b2e2e2", "#66c2a4", "#238b45"]
+            bins = ax[i].hist(self.hubble.loc[self.gold, param], alpha = 0.5, color = colors[2], label = 'Gold', bins = 10)
+            ax[i].hist(self.hubble.loc[self.excess, param], alpha = 0.5, color = colors[1], label = 'Excess', bins = bins[1])
+            ax[i].hist(self.hubble.loc[self.nd, param], alpha = 0.5, color = colors[0], label = 'No Excess', bins = bins[1])
+            ax[i].legend()
+            ax[i].set_xlabel(param)
+            ax[i].set_yticks([])
+
+        if save_fig is not None:
+            plt.savefig(save_fig + '{}_SALT3_comparison.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+
     def load_from_saved(self, save_path):
         """Load computed parameters from a saved directory.
         
@@ -950,7 +1006,7 @@ class Dataset(object):
         -----------
         save_path: str, path to directory containing saved parameters"""
 
-        self.hubble = pd.read_csv(save_path + '{}_hubble.csv', index_col='SN')
+        self.hubble = pd.read_csv(save_path + '{}_hubble.csv'.format(self.name), index_col='SN')
         self.sn_names = self.hubble.index.unique()
         print('Loaded Hubble diagram parameters')
         
@@ -975,19 +1031,20 @@ class Dataset(object):
         """Create a LaTeX table of fit parameters, as seen in the paper."""
 
         for sn in self.excess:
-            row = self.gauss_params.loc[sn]
-            mb = -2.5 * np.log10(row['x0']) + 10.635
-            dmb = 2.5 * 0.434 * row['dx0'] / row['x0']
+            sn_row = self.hubble.loc[sn]
+            gauss_row = self.gauss_params.loc[sn]
+            mb = -2.5 * np.log10(sn_row['x0']) + 10.635
+            dmb = 2.5 * 0.434 * sn_row['dx0'] / sn_row['x0']
             # name, z, t_exp, M_B, x_1, c, BIC, bump_r, bump_g, N
             print('{} & {} & {} & {} & {} & {} & {} & {} & {} & {} \\\\'.format(sn.split('18')[1], 
-                                                                                np.round(row['z'], 3), 
-                                                                                np.round(row['t0'] - 2400000.5, 1),
+                                                                                np.round(sn_row['z'], 3), 
+                                                                                np.round(sn_row['t0'] - 2400000.5, 1),
                                                                                 table_errs(mb, dmb), 
-                                                                                table_errs(row['x1'], row['dx1']),
-                                                                                table_errs(row['c'], row['dc']), 
-                                                                                row['BIC'], 
-                                                                                table_errs(row['fr'], row['dfr']),
-                                                                                table_errs(row['fg'], row['dfg']),
+                                                                                table_errs(sn_row['x1'], sn_row['dx1']),
+                                                                                table_errs(sn_row['c'], sn_row['dc']), 
+                                                                                gauss_row['BIC'], 
+                                                                                table_errs(gauss_row['fr'], gauss_row['dfr']),
+                                                                                table_errs(gauss_row['fg'], gauss_row['dfg']),
                                                                                 self.N.loc[sn, 'N']))
 
     def end_to_end(self, verbose = False, save_path = None):
