@@ -550,8 +550,7 @@ class Lightcurve(object):
         plot: if True, will plot BIC difference vs. cut
         """
 
-        cuts = np.arange(7, 14)
-
+        cuts = np.arange(8, 14)
         if self.sn_name == 'ZTF18abssuxz':
             cuts = np.arange(1,10)
         

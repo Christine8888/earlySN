@@ -38,11 +38,21 @@ def avg_and_error(data, errs):
 
     return avg, err
 
-def mass_statistics(sn_names, masses):
-    std = np.std(masses.loc[sn_names].dropna())[0]
-    avg = np.average(masses.loc[sn_names].dropna())
-    err = std * np.sqrt(1/masses.loc[sn_names].dropna().shape[0])
-    return avg, err 
+def med_and_mad(data, errs):
+    """
+    Calculate median and standard median absolute deviation.
+
+    Parameters:
+    -----------
+    data: array-like, data to average
+    errs: array-like, uncertainties on data
+    """
+
+    med = np.median(data)
+    mad = stats.median_abs_deviation(data)
+    mad /= np.sqrt(data.shape[0])
+
+    return med, mad
 
 def flux_from_amp(row, mu = 'mu', sigma = 'sigma', amp = 'amp'):
     """ Calculate the peak flux of a Gaussian from mu, sigma, and amplitude.
@@ -402,37 +412,37 @@ class Dataset(object):
 
             if self.hubble.loc[sn, 'z'] > z_max:
                 self.sn_names.drop(i, inplace=True)
-                print(sn, 'z')
+                if verbose: print(sn, 'z')
                 continue
             
             if len(sn_data[np.abs(sn_data['jd'] - self.hubble.loc[sn, 't0']) < 10]) < min_points:
                 self.sn_names.drop(i, inplace=True)
-                print(sn, 'jd')
+                if verbose: print(sn, 'jd')
                 continue
             
             if self.hubble.loc[sn, 'dx1'] > dx1_max:
                 self.sn_names.drop(i, inplace=True)
-                print(sn, 'dx1')
+                if verbose: print(sn, 'dx1')
                 continue
 
             if self.hubble.loc[sn, 'dt0'] > dt0_max:
                 self.sn_names.drop(i, inplace=True)
-                print(sn, 'dt0')
+                if verbose: print(sn, 'dt0')
                 continue
 
             if self.hubble.loc[sn, 'dc'] > dc_max:
                 self.sn_names.drop(i, inplace=True)
-                print(sn, 'dc')
+                if verbose: print(sn, 'dc')
                 continue
 
             if self.hubble.loc[sn, 'x1'] > x1_max or self.hubble.loc[sn, 'x1'] < -1 * x1_max:
                 self.sn_names.drop(i, inplace=True)
-                print(sn, 'x1')
+                if verbose: print(sn, 'x1')
                 continue
 
             if self.hubble.loc[sn, 'c'] > c_max or self.hubble.loc[sn, 'c'] < -1 * c_max:
                 self.sn_names.drop(i, inplace=True)
-                print(sn, 'c')
+                if verbose: print(sn, 'c')
                 continue
             
         self.hubble = self.hubble.loc[self.sn_names]
@@ -473,8 +483,9 @@ class Dataset(object):
 
         param_names = ["$\alpha$", "$\beta$", "$\gamma$", "M_0", "M_1", "M_2", "$\sigma_i$"]
         if verbose: 
-            result_string = ""
+            result_string = "\n"
             for i in range(len(result.x)): # TO-DO: add in parameter names
+                result_string += "\n"
                 result_string += param_names[i]
                 result_string += "= "
                 result_string += str(result.x[i])
@@ -517,8 +528,8 @@ class Dataset(object):
         
         z = self.hubble.loc[self.sn_names, 'z'].to_numpy(dtype=float)
         if save_path is not None:
-            plt.errorbar(z, mu, yerr = mu_errs, fmt='o', markersize=3, label='ZTF18')#, yerr=mu_errs)
-            plt.plot(np.sort(z), cosmo.distmod(np.sort(z)), label='Planck18')
+            plt.errorbar(z, mu, yerr = mu_errs, c = 'k', fmt='o', markersize=3, label='ZTF18')#, yerr=mu_errs)
+            plt.plot(np.sort(z), cosmo.distmod(np.sort(z)), c = 'b', label='Planck18')
             plt.xlabel('z')
             plt.ylabel('$\mu$')
             plt.legend()
@@ -733,10 +744,10 @@ class Dataset(object):
         save_fig: str, optional (default = None), path to directory to save resulting figure"""
 
         # Compute statistics
-        gold_avg, gold_err = mass_statistics(self.gold, self.masses)
-        nd_avg, nd_err = mass_statistics(self.gold_nd, self.masses)
-        excess_avg, excess_err = mass_statistics(self.excess, self.masses)
-        noexcess_avg, noexcess_err = mass_statistics(self.nd, self.masses)
+        gold_avg, gold_err = med_and_mad(self.masses.loc[self.gold, 'mass'].dropna(), None)
+        nd_avg, nd_err = med_and_mad(self.masses.loc[self.gold_nd, 'mass'].dropna(), None)
+        excess_avg, excess_err = med_and_mad(self.masses.loc[self.excess, 'mass'].dropna(), None)
+        noexcess_avg, noexcess_err = med_and_mad(self.masses.loc[self.nd, 'mass'].dropna(), None)
 
         # Plot histograms
         cn = ["#68affc", "#304866"][0]
@@ -766,11 +777,6 @@ class Dataset(object):
         plt.yticks([])
         
         # Compute non-Gaussian statistics
-        print('gold: ', 'median', self.masses.loc[self.gold].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.gold])[0])
-        print('all excess: ', 'median', self.masses.loc[self.excess].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.excess])[0])
-        print('all no excess: ', 'median', self.masses.loc[self.nd].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.nd].dropna())[0])
-        print('gold no excess: ', 'median', self.masses.loc[self.gold_nd].median()[0], 'MAD', stats.median_abs_deviation(self.masses.loc[self.gold_nd])[0])
-
         print('Levene :', stats.levene(self.masses.loc[self.excess]['mass'].dropna(), self.masses.loc[self.nd]['mass'].dropna()))
         print('Bartlett :', stats.bartlett(self.masses.loc[self.excess]['mass'].dropna(), self.masses.loc[self.nd]['mass'].dropna()))
         
@@ -867,16 +873,16 @@ class Dataset(object):
         fig.supylabel('$f_{bump}$ / $f_{10}$')
         ax[1].set_xlabel('JD since First Light')
             
-        mu_avg, mu_err = avg_and_error(self.gauss_params['mu'], self.gauss_params['dmu'])
+        mu_avg, mu_err = med_and_mad(self.gauss_params['mu'], self.gauss_params['dmu'])
         print(r'$\mu$', mu_avg, mu_err)
         ax[0].axvspan(mu_avg - mu_err, mu_avg + mu_err, color='k', alpha=0.3)
         ax[1].axvspan(mu_avg - mu_err, mu_avg + mu_err, color='k', alpha=0.3)
 
-        sig_avg, sig_err = avg_and_error(self.gauss_params['sigma'], self.gauss_params['dsigma'])
+        sig_avg, sig_err = med_and_mad(self.gauss_params['sigma'], self.gauss_params['dsigma'])
         print(r'$\sigma$', sig_avg, sig_err)
 
         if save_fig:
-            plt.savefig(save_fig + './{}_curves.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+            plt.savefig(save_fig + '{}_curves.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
 
     def analyze_bump_amps(self, c1 = 'r', c2 = 'g', save_fig = None):
         """
@@ -893,16 +899,16 @@ class Dataset(object):
         gauss_params = self.gauss_params.loc[self.excess]
 
         # Compute bump colors and properties
-        r_avg, r_err = avg_and_error(gauss_params['f{}'.format(c1)], gauss_params['df{}'.format(c1)])
+        r_avg, r_err = med_and_mad(gauss_params['f{}'.format(c1)], gauss_params['df{}'.format(c1)])
         print(c1, ':', r_avg, r_err)
-        g_avg, g_err = avg_and_error(gauss_params['f{}'.format(c2)], gauss_params['df{}'.format(c2)])
+        g_avg, g_err = med_and_mad(gauss_params['f{}'.format(c2)], gauss_params['df{}'.format(c2)])
         print(c2, ':', g_avg, g_err)
 
         diff = g_avg - r_avg
         d_err = np.sqrt(r_err**2 + g_err**2)
         print('$f{} - f{} = {} \pm {}$'.format(c1, c2, diff, d_err))
 
-        color_avg, color_err = avg_and_error(gauss_params['color'], gauss_params['dcolor'])
+        color_avg, color_err = med_and_mad(gauss_params['color'], gauss_params['dcolor'])
         print('$\log_{{10}}(G - R) = {} \pm {}$'.format(color_avg, color_err))
 
         # Plot bump amplitudes between bands
@@ -916,7 +922,7 @@ class Dataset(object):
         plt.ylabel('$f_{bump,g}$ / $f_{10,g}$')
 
         if save_fig is not None:
-            plt.savefig(save_fig + './{}_bumps.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+            plt.savefig(save_fig + '{}_bumps.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
 
     def analyze_PL(self, save_fig = None, subset = "excess"):
         """
@@ -930,16 +936,16 @@ class Dataset(object):
         if subset == "excess":
             pl_params = self.gauss_params.loc[self.excess].dropna()
         elif subset == "all":
-            pl_params = self.gauss_params.dropna()
+            pl_params = self.pl_params.loc[self.nd].dropna()
         
         pl_params = pl_params[np.logical_and(pl_params['dalpha_r'] < 1, pl_params['dalpha_g'] < 1)]
         plt.subplots(figsize=(6,5))
 
         # Compute power law slopes by color
-        r_avg, r_err = avg_and_error(pl_params['alpha_r'], pl_params['dalpha_r'])
+        r_avg, r_err = med_and_mad(pl_params['alpha_r'], pl_params['dalpha_r'])
         print(r_avg, r_err)
 
-        g_avg, g_err = avg_and_error(pl_params['alpha_g'], pl_params['dalpha_g'])
+        g_avg, g_err = med_and_mad(pl_params['alpha_g'], pl_params['dalpha_g'])
         print(g_avg, g_err)
 
         diff = g_avg - r_avg
@@ -950,7 +956,9 @@ class Dataset(object):
         plt.errorbar(pl_params['alpha_r'], pl_params['alpha_g'], yerr = pl_params['dalpha_g'], 
                     xerr = pl_params['dalpha_r'], fmt = 'o', c = 'k', markersize = 5)
        
-        x = np.linspace(1.1, 2.75)
+        x = np.linspace(0.5, 3.5)
+        plt.xlim(0.5, 3.5)
+        plt.ylim(0.5, 3.5)
         plt.axhspan(g_avg - g_err, g_avg + g_err, alpha = 0.5, color = 'g', label = r'$\overline{\alpha}_g$ $(1\sigma)$')
         plt.axvspan(r_avg - r_err, r_avg + r_err, alpha = 0.5, hatch = 'X',facecolor = 'r', edgecolor = 'k', label = r'$\overline{\alpha}_r$ $(1\sigma)$')
 
@@ -969,23 +977,24 @@ class Dataset(object):
         -----------
         save_fig: str, path to directory to save figure (default = None)"""
 
+        sn_list = self.gauss_params.index.unique()
         plt.subplots(figsize=(6, 5))
-        plt.scatter(self.hubble['x1'], self.gauss_params['fr'], marker = 's', c = 'r', label = 'r', alpha = 0.5)
-        plt.scatter(self.hubble['x1'], self.gauss_params['fg'], marker = 's', c = 'g', label = 'g', alpha = 0.5)
+        plt.scatter(self.hubble.loc[sn_list, 'x1'], self.gauss_params['fr'], marker = 's', c = 'r', label = 'r', alpha = 0.5)
+        plt.scatter(self.hubble.loc[sn_list, 'x1'], self.gauss_params['fg'], marker = 's', c = 'g', label = 'g', alpha = 0.5)
 
-        fit_r = np.polyfit(np.array(self.hubble['x1'], dtype = float), np.array(self.gauss_params['fr'], dtype = float), 1)
-        plt.plot(self.hubble['x1'], np.poly1d(fit_r)(self.hubble['x1']), alpha = 0.5, color = 'r')
-        fit_g = np.polyfit(np.array(self.hubble['x1'], dtype = float), np.array(self.gauss_params['fg'], dtype = float), 1)
-        plt.plot(self.hubble['x1'], np.poly1d(fit_g)(self.hubble['x1']), alpha = 0.5, color = 'g')
+        fit_r = np.polyfit(np.array(self.hubble.loc[sn_list, 'x1'], dtype = float), np.array(self.gauss_params['fr'], dtype = float), 1)
+        plt.plot(self.hubble.loc[sn_list, 'x1'], np.poly1d(fit_r)(self.hubble.loc[sn_list, 'x1']), alpha = 0.5, color = 'r')
+        fit_g = np.polyfit(np.array(self.hubble.loc[sn_list, 'x1'], dtype = float), np.array(self.gauss_params['fg'], dtype = float), 1)
+        plt.plot(self.hubble.loc[sn_list, 'x1'], np.poly1d(fit_g)(self.hubble.loc[sn_list, 'x1']), alpha = 0.5, color = 'g')
 
         plt.xlabel('excess width ' + r'$\sigma$')
         plt.ylabel(r'$f_{bump} / f_{10}$')
         
-        print('r', stats.pearsonr(self.hubble['x1'], self.gauss_params['fr']))
-        print('g', stats.pearsonr(self.hubble['x1'], self.gauss_params['fg']))
+        print('r', stats.pearsonr(self.hubble.loc[sn_list, 'x1'], self.gauss_params['fr']))
+        print('g', stats.pearsonr(self.hubble.loc[sn_list, 'x1'], self.gauss_params['fg']))
 
         if save_fig is not None:
-            plt.savefig(save_fig + './{}_stretch_correlation.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+            plt.savefig(save_fig + '{}_stretch_correlation.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
 
     def compare_fit_params(self, params = ['x1', 'c'], save_fig = None):
         """Compare SALT3 parameters between SN with and without excess.
@@ -995,21 +1004,22 @@ class Dataset(object):
         params: list (str) of parameters to compare (default = ['x1', 'c'])
         save_fig: str, path to directory to save figure (default = None)"""
         
-        fig, ax = plt.subplots(1, len(params), figsize=(len(params) * 5,5))
+        #fig, ax = plt.subplots(1, len(params), figsize=(len(params) * 5,5))
+        fig, ax = plt.subplots(len(params), 1, figsize=(5, len(params) * 3))
         for i, param in enumerate(params):
-            gold_avg, gold_err = np.mean(self.hubble.loc[self.gold, param]), np.std(self.hubble.loc[self.gold, param])/np.sqrt(len(self.gold))
+            gold_avg, gold_err = med_and_mad(self.hubble.loc[self.gold, param], self.hubble.loc[self.gold, 'd{}'.format(param)])
             print('Gold {}: '.format(param), gold_avg, gold_err)
 
-            excess_avg, excess_err = np.mean(self.hubble.loc[self.excess, param]), np.std(self.hubble.loc[self.excess, param])/np.sqrt(len(self.excess))
+            excess_avg, excess_err = med_and_mad(self.hubble.loc[self.excess, param], self.hubble.loc[self.excess, 'd{}'.format(param)])
             print('Excess {}: '.format(param), excess_avg, excess_err)
 
-            noexcess_avg, noexcess_err = np.mean(self.hubble.loc[self.nd, param]), np.std(self.hubble.loc[self.nd, param])/np.sqrt(len(self.nd))
+            noexcess_avg, noexcess_err = med_and_mad(self.hubble.loc[self.nd, param], self.hubble.loc[self.nd, 'd{}'.format(param)])
             print('No Excess {}: '.format(param), noexcess_avg, noexcess_err)
 
             colors = ["#b2e2e2", "#66c2a4", "#238b45"]
-            bins = ax[i].hist(self.hubble.loc[self.gold, param], alpha = 0.5, color = colors[2], label = 'Gold', bins = 10)
+            bins = ax[i].hist(self.hubble.loc[self.nd, param], alpha = 0.5, color = colors[0], label = 'No Excess', bins = 15)
             ax[i].hist(self.hubble.loc[self.excess, param], alpha = 0.5, color = colors[1], label = 'Excess', bins = bins[1])
-            ax[i].hist(self.hubble.loc[self.nd, param], alpha = 0.5, color = colors[0], label = 'No Excess', bins = bins[1])
+            ax[i].hist(self.hubble.loc[self.gold, param], alpha = 0.5, color = colors[2], label = 'Gold', bins = bins[1])
             ax[i].legend()
             ax[i].set_xlabel(param)
             ax[i].set_yticks([])
