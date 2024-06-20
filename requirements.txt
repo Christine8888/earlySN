@@ -1,0 +1,10 @@
+numpy
+pandas
+matplotlib
+math
+sncosmo
+os
+ztfdr
+astrophy
+dustmaps
+scipy

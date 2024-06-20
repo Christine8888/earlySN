@@ -4,19 +4,13 @@ import matplotlib.pyplot as plt
 import math
 import sncosmo
 import os
-import ztfdr
-from ztfdr import release
 from astropy.cosmology import Planck18 as cosmo 
-from astropy.table import Table, unique
-import dustmaps.sfd
-#dustmaps.sfd.fetch()
-from dustmaps.sfd import SFDQuery
+from astropy import units as u
 from astropy.coordinates import SkyCoord
+from dustmaps.sfd import SFDQuery
 import scipy.optimize as opt 
 from scipy import stats 
 from earlySN import lightcurve
-from astropy import units as u
-from astropy.cosmology import Planck18 as cosmo
 
 # OPEN TO-DO LIST
 # Add in more functionality for different bands + custom dataset formats
