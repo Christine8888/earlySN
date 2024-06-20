@@ -475,8 +475,8 @@ class Lightcurve(object):
         # Optimize parameters by model
         if model == 'powerlaw':
             x0 = [self.guess_t0] + [guess_amp[band] for band in self.bands] + [pl_guess] * n + [0] * n
-            lbound = [self.guess_t0 - 20] + [0] * n + [pl_min] * n + [-100] * n
-            ubound = [self.guess_t0 + 20] + [500] * n + [pl_max] * n + [100] * n
+            lbound = [self.guess_t0 - 10] + [0] * n + [pl_min] * n + [-100] * n
+            ubound = [self.guess_t0 + 20] + [1000] * n + [pl_max] * n + [100] * n
             
             result = opt.least_squares(pl_model, x0 = x0, bounds = (lbound, ubound), args = args)
         
@@ -730,7 +730,6 @@ class Lightcurve(object):
             pl_params = list(result.x) + list(var)
 
         # Compute Gauss+PL parameters for best fit
-        
         if best_cut == None:
             best_cut = cuts[reasonable][np.argsort(deltas[reasonable])[0]]
         

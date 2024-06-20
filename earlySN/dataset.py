@@ -506,9 +506,8 @@ class Dataset(object):
         mu_resids = np.array(mu) - np.array(cosmo.distmod(z))
         mu_resids /= mu_errs
         
-        
         outlier_cut = np.abs(mu_resids) > outlier_cut
-        if verbose: print('Outliers: ', self.sn_names[list(self.sn_names[outlier_cut].index)])
+        if verbose: print('Outliers: ', list(self.sn_names[outlier_cut].index))
         self.sn_names = self.sn_names[~outlier_cut]
         self.hubble = self.hubble.loc[self.sn_names]
         if verbose: print("Repeating Tripp fit without outliers")
@@ -523,7 +522,7 @@ class Dataset(object):
             plt.xlabel('z')
             plt.ylabel('$\mu$')
             plt.legend()
-            plt.savefig(save_path + '/{}_hubble_diagram.pdf'.format(self.name))
+            plt.savefig(save_path + '{}_hubble_diagram.pdf'.format(self.name))
 
         # Save distance moduli (mu) and uncertainties (mu_errs)
         self.hubble.loc[self.sn_names, 'mu'] = mu
@@ -553,6 +552,25 @@ class Dataset(object):
             gauss_params = gauss_result.x
             early_data, outliers, t_range, binned, y = fit.analyze("gauss", early_data, gauss_result.x, cut)
             fit.plot(early_data, t_range, binned, y)
+
+    def fit_just_pl(self, cut = 10):
+        """ Fit power-law model to all supernovae in the dataset.
+        
+        Parameters:
+        -----------
+        cut: int (default = 10), number of days to cut lightcurve at.
+        """
+        for sn in self.sn_names:
+            data = self.data.loc[sn]
+            data = data[data['flux'] / data['flux_err'] > -2]
+            params = self.hubble.loc[sn]
+            
+            fit = lightcurve.Lightcurve(sn, data, params, self.bands, self.name, save_fig = False, verbose = True)
+            pl_result, early_data = fit.fit_model(cut = cut, model = 'powerlaw')
+            J = pl_result.jac
+            cov = np.linalg.inv(J.T.dot(J))
+            var = np.sqrt(np.diagonal(cov))
+            self.pl_params.loc[sn] = list(pl_result.x) + list(var)
 
     def excess_search(self, save_path = None, save_fig = None, verbose = False):
         """ Search for lightcurves with early excess. To be applied after Hubble fitting and parameter cuts
@@ -944,30 +962,30 @@ class Dataset(object):
         if save_fig is not None:
             plt.savefig(save_fig + './{}_slopes.pdf'.format(self.name), bbox_inches = 'tight', pad_inches=0)
     
-    def analyze_width_correlation(self, save_fig = None):
-        """Analyze correlation between bump width and amplitude.
+    def analyze_stretch_correlation(self, save_fig = None):
+        """Analyze correlation between SN stretch and bump amplitude.
         
         Parameters:
         -----------
         save_fig: str, path to directory to save figure (default = None)"""
 
         plt.subplots(figsize=(6, 5))
-        plt.scatter(self.gauss_params['sigma'], self.gauss_params['fr'], marker = 's', c = 'r', label = 'r', alpha = 0.5)
-        plt.scatter(self.gauss_params['sigma'], self.gauss_params['fg'], marker = 's', c = 'g', label = 'g', alpha = 0.5)
+        plt.scatter(self.hubble['x1'], self.gauss_params['fr'], marker = 's', c = 'r', label = 'r', alpha = 0.5)
+        plt.scatter(self.hubble['x1'], self.gauss_params['fg'], marker = 's', c = 'g', label = 'g', alpha = 0.5)
 
-        fit_r = np.polyfit(np.array(self.gauss_params['sigma'], dtype = float), np.array(self.gauss_params['fr'], dtype = float), 1)
-        plt.plot(self.gauss_params['sigma'], np.poly1d(fit_r)(self.gauss_params['sigma']), alpha = 0.5, color = 'r')
-        fit_g = np.polyfit(np.array(self.gauss_params['sigma'], dtype = float), np.array(self.gauss_params['fg'], dtype = float), 1)
-        plt.plot(self.gauss_params['sigma'], np.poly1d(fit_g)(self.gauss_params['sigma']), alpha = 0.5, color = 'g')
+        fit_r = np.polyfit(np.array(self.hubble['x1'], dtype = float), np.array(self.gauss_params['fr'], dtype = float), 1)
+        plt.plot(self.hubble['x1'], np.poly1d(fit_r)(self.hubble['x1']), alpha = 0.5, color = 'r')
+        fit_g = np.polyfit(np.array(self.hubble['x1'], dtype = float), np.array(self.gauss_params['fg'], dtype = float), 1)
+        plt.plot(self.hubble['x1'], np.poly1d(fit_g)(self.hubble['x1']), alpha = 0.5, color = 'g')
 
         plt.xlabel('excess width ' + r'$\sigma$')
         plt.ylabel(r'$f_{bump} / f_{10}$')
         
-        print('r', stats.pearsonr(self.gauss_params['sigma'], self.gauss_params['fr']))
-        print('g', stats.pearsonr(self.gauss_params['sigma'], self.gauss_params['fg']))
+        print('r', stats.pearsonr(self.hubble['x1'], self.gauss_params['fr']))
+        print('g', stats.pearsonr(self.hubble['x1'], self.gauss_params['fg']))
 
         if save_fig is not None:
-            plt.savefig(save_fig + './{}_width_correlation.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
+            plt.savefig(save_fig + './{}_stretch_correlation.pdf'.format(self.name), bbox_inches='tight', pad_inches=0)
 
     def compare_fit_params(self, params = ['x1', 'c'], save_fig = None):
         """Compare SALT3 parameters between SN with and without excess.
@@ -979,13 +997,13 @@ class Dataset(object):
         
         fig, ax = plt.subplots(1, len(params), figsize=(len(params) * 5,5))
         for i, param in enumerate(params):
-            gold_avg, gold_err = avg_and_error(self.hubble.loc[self.gold, param], self.hubble.loc[self.gold, "d{}".format(param)])
+            gold_avg, gold_err = np.mean(self.hubble.loc[self.gold, param]), np.std(self.hubble.loc[self.gold, param])/np.sqrt(len(self.gold))
             print('Gold {}: '.format(param), gold_avg, gold_err)
 
-            excess_avg, excess_err = avg_and_error(self.hubble.loc[self.excess, param], self.hubble.loc[self.excess, "d{}".format(param)])
+            excess_avg, excess_err = np.mean(self.hubble.loc[self.excess, param]), np.std(self.hubble.loc[self.excess, param])/np.sqrt(len(self.excess))
             print('Excess {}: '.format(param), excess_avg, excess_err)
 
-            noexcess_avg, noexcess_err = avg_and_error(self.hubble.loc[self.nd, param], self.hubble.loc[self.nd, "d{}".format(param)])
+            noexcess_avg, noexcess_err = np.mean(self.hubble.loc[self.nd, param]), np.std(self.hubble.loc[self.nd, param])/np.sqrt(len(self.nd))
             print('No Excess {}: '.format(param), noexcess_avg, noexcess_err)
 
             colors = ["#b2e2e2", "#66c2a4", "#238b45"]
