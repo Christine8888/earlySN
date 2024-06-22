@@ -64,9 +64,12 @@ def pl_model(params, data, bands):
     
     # Initialize all parameters
     t_rise = params[0]
-    amps = {'r': params[1], 'g': params[2]}
-    power = {'r': params[3], 'g': params[4]}
-    offset = {'r': params[5], 'g': params[6]}
+    amps, power, offset = {}, {}, {}
+
+    for i, band in enumerate(bands):
+        amps[band] = params[1 + i]
+        power[band] = params[1 + len(bands) + i]
+        offset[band] = params[1 + 2 * len(bands) + i]
     
     # Count total number of data points
     total = 0
@@ -117,13 +120,17 @@ def gauss_model(params, data, bands):
     bands: array of bands
     """
     t_rise = params[0]
-    amps = {'r': params[1], 'g': params[2]}
-    power = {'r': params[3], 'g': params[4]}
-    gdelta = params[5] # model time offset between power-law first light and Gaussian peak
-    mu = gdelta + t_rise
-    sigma = params[6]
-    gauss_amps = {'r': params[7], 'g': params[8]}
-    offset = {'r': params[9], 'g': params[10]}
+    amps, power, gauss_amps, offset = {}, {}, {}, {}
+
+    for i, band in enumerate(bands):
+        amps[band] = params[1 + i]
+        power[band] = params[1 + len(bands) + i]
+        gauss_amps[band] = params[3 + 2 * len(bands) + i]
+        offset[band] = params[3 + 3 * len(bands) + i]
+   
+    gdelta = params[1 + 2 * len(bands)]
+    mu = gdelta + t_rise # model time offset between power-law first light and Gaussian peak
+    sigma = params[2 + 2 * len(bands)]
      
     # Count total number of data points
     total = 0
@@ -332,7 +339,7 @@ def nd(cuts, deltas, outliers, result, early_data, bands, best_cut, verbose):
     
 
     # Check BIC criterion
-    if deltas[deltas<5].shape[0] > 1:
+    if deltas[deltas < 5].shape[0] > 1:
         if verbose: print('BIC prefers gauss')
         return False
     
@@ -367,7 +374,7 @@ def nd(cuts, deltas, outliers, result, early_data, bands, best_cut, verbose):
 
         total += binned[i].shape[0]
     
-    # Chi2/outleir checks
+    # Chi2/outlier checks
     chi = gauss_model(result.x, binned, bands)
     if chi[chi > 10].shape[0] >= 1: #changed on 8.4
         if verbose: print('Extreme outlier')
@@ -633,7 +640,7 @@ class Lightcurve(object):
                 else:
                     print('Oops, not yet implemented.')
             
-        if self.verbose: print(cut, outliers) # TO-DO: TURN OFF?  
+        # if self.verbose: print(cut, outliers)
         
         return early_data, outliers, t_range, binned, (rise_y, binned_y)
     
@@ -650,7 +657,6 @@ class Lightcurve(object):
 
         rise_y, binned_y = y
         fig, ax = plt.subplots(len(self.bands), 2, figsize=(4 * len(self.bands), 8))
-
         
         for band in self.bands:
             i = self.bands.index(band)
