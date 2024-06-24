@@ -36,17 +36,19 @@ def avg_and_error(data, errs):
 
 def med_and_mad(data, errs):
     """
-    Calculate median and standard median absolute deviation.
+    Calculate median and boostrapepd 1 sigma uncertainty.
 
     Parameters:
     -----------
     data: array-like, data to average
     errs: array-like, uncertainties on data
     """
-
     med = np.median(data)
-    mad = stats.median_abs_deviation(data)
-    mad /= np.sqrt(data.shape[0])
+    
+    mad = stats.bootstrap((data.values,), np.median, confidence_level=0.68, n_resamples=10000).confidence_interval
+    mad = (mad[1] - mad[0]) / 2
+    # mad = stats.median_abs_deviation(data)
+    # mad /= np.sqrt(data.shape[0])
 
     return med, mad
 
@@ -756,7 +758,7 @@ class Dataset(object):
         plt.legend()
 
         center = {'yao': 8.2, 'burke': 8.2, 'dhawan': 6.8}
-        ranges = {'yao': [11, 15], 'burke': [11, 15], 'dhawan': [22, 43]}
+        ranges = {'yao': [11, 15], 'burke': [11, 15], 'dhawan': [22, 40]}
         titles = {'yao': 'Yao et al. 2019', 'dhawan': 'Dhawan et al. 2022', "burke": 'Burke et al. 2022b'}
 
         # Figure labels and titles
@@ -934,7 +936,7 @@ class Dataset(object):
         if save_fig is not None:
             plt.savefig(save_fig + '{}_{}_{}_bumps.pdf'.format(self.name, c1, c2), bbox_inches='tight', pad_inches=0)
 
-    def analyze_PL(self, c1 = 'r', c2 = 'g', save_fig = None, subset = "excess"):
+    def analyze_PL(self, c1 = 'r', c2 = 'g', cut_err = False, save_fig = None, subset = "excess"):
         """
         Analyze and plot power-law slopes for all gold supernovae, comparing between 2 bands.
 
@@ -942,6 +944,7 @@ class Dataset(object):
         -----------
         c1: str, band 1 (default = 'r'); must be in self.bands
         c2: str, band 2 (default = 'g')
+        cut_err: bool, optional (default = False); if True, cut power-law slopes with large errors
         save_fig: str, path to directory to save figure (default = None)
         subset: str, subset of supernovae to analyze (default = "excess")
         """
@@ -950,15 +953,16 @@ class Dataset(object):
             pl_params = self.gauss_params.loc[self.excess].dropna()
         elif subset == "all":
             pl_params = self.pl_params.loc[self.nd].dropna()
-
-        pl_params = pl_params[np.logical_and(pl_params['dalpha_{}'.format(c1)] < 1, pl_params['dalpha_{}'.format(c2)] < 1)]
+        
+        if cut_err:
+            pl_params = pl_params[np.logical_and(pl_params['dalpha_{}'.format(c1)] < 1, pl_params['dalpha_{}'.format(c2)] < 1)]
         plt.subplots(figsize=(6, 5))
 
         # Compute power law slopes by color
         c1_avg, c1_err = med_and_mad(pl_params['alpha_{}'.format(c1)], pl_params['dalpha_{}'.format(c1)])
-        print(c1_avg, c1_err)
+        print(c1, c1_avg, c1_err)
         c2_avg, c2_err = med_and_mad(pl_params['alpha_{}'.format(c2)], pl_params['dalpha_{}'.format(c2)])
-        print(c2_avg, c2_err)
+        print(c2, c2_avg, c2_err)
 
         diff = c2_avg - c1_avg
         d_err = np.sqrt(c1_err ** 2 + c2_err ** 2)
@@ -1052,7 +1056,7 @@ class Dataset(object):
 
             self.salt3 = pd.read_csv(save_path + '{}_salt3_params.csv'.format(alt_name), index_col='SN')
             self.hubble = pd.read_csv(save_path + '{}_hubble.csv'.format(alt_name), index_col='SN')
-            self.sn_names = self.hubble.index.unique()
+            self.sn_names = pd.Series(self.hubble.index.unique())
             print('Loaded Hubble diagram parameters')
             
             if load_excess:
@@ -1067,10 +1071,10 @@ class Dataset(object):
                     with open(save_path + '{}_bronze.txt'.format(alt_name), 'r') as f:
                         self.bronze = [line.strip() for line in f.readlines()]
                     
-            self.nd = []
-            for i in self.sn_names:
-                if i not in self.gold and i not in self.bronze:
-                    self.nd += [i]
+            # self.nd = []
+            # for i in self.sn_names:
+            #     if i not in self.gold and i not in self.bronze:
+            #         self.nd += [i]
 
             if os.path.exists(save_path + '{}_gauss_params.csv'.format(alt_name)):
                 print('Loaded lightcurve fit parameters')
